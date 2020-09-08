@@ -11,8 +11,10 @@ HOST_MODEL_IDENTIFIER = "FV3"
 
 # Add all files with metadata tables on the host model side and in CCPP,
 # relative to basedir = top-level directory of host model. This includes
-# kind and type definitions used in CCPP physics.
+# kind and type definitions used in CCPP physics. Also add any internal
+# dependencies of these files to the list.
 VARIABLE_DEFINITION_FILES = [
+    # actual variable definition files
     'FV3/ccpp/physics/physics/machine.F',
     'FV3/ccpp/physics/physics/radsw_param.f',
     'FV3/ccpp/physics/physics/radlw_param.f',
@@ -85,6 +87,7 @@ TYPEDEFS_NEW_METADATA = {
         },
     }
 
+<<<<<<< HEAD
 # Add all physics scheme dependencies relative to basedir - note that the CCPP
 # rules stipulate that dependencies are not shared between the schemes!
 SCHEME_FILES_DEPENDENCIES = [
@@ -207,6 +210,8 @@ SCHEME_FILES_DEPENDENCIES = [
     'FV3/gfsphysics/CCPP_layer/CCPP_typedefs.F90',
     ]
 
+=======
+>>>>>>> 223f09255ac19cae2d1c8ee64c37c8c30ef449d0
 # Add all physics scheme files relative to basedir
 SCHEME_FILES = [
     # Relative path to source (from where ccpp_prebuild.py is called) : [ list of physics sets in which scheme may be called ];
@@ -300,25 +305,24 @@ SCHEME_FILES = [
     # HAFSFER_HIRES
     'FV3/ccpp/physics/physics/mp_fer_hires.F90',
     # RRTMGP
-    'FV3/ccpp/physics/physics/rrtmgp_lw_gas_optics.F90'         ,
-    'FV3/ccpp/physics/physics/rrtmgp_lw_cloud_optics.F90'       ,
-    'FV3/ccpp/physics/physics/rrtmgp_sw_gas_optics.F90'         ,
-    'FV3/ccpp/physics/physics/rrtmgp_sw_cloud_optics.F90'       ,
-    'FV3/ccpp/physics/physics/rrtmgp_sw_aerosol_optics.F90'     ,
-    'FV3/ccpp/physics/physics/rrtmgp_lw_rte.F90'                ,
-    'FV3/ccpp/physics/physics/rrtmgp_sw_rte.F90'                ,
-    'FV3/ccpp/physics/physics/rrtmgp_lw_aerosol_optics.F90'     ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_setup.F90'             ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_pre.F90'               ,
-    'FV3/ccpp/physics/physics/rrtmgp_lw_pre.F90'                ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_sw_pre.F90'            ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_lw_post.F90'           ,
-    'FV3/ccpp/physics/physics/rrtmgp_lw_cloud_sampling.F90' ,
-    'FV3/ccpp/physics/physics/rrtmgp_sw_cloud_sampling.F90' ,
-    'FV3/ccpp/physics/physics/GFS_cloud_diagnostics.F90'           ,
-    'FV3/ccpp/physics/physics/mo_cloud_sampling.F90'               ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_gfdlmp_pre.F90'           ,
-    'FV3/ccpp/physics/physics/GFS_rrtmgp_zhaocarr_pre.F90'         ,
+    'FV3/ccpp/physics/physics/rrtmgp_lw_gas_optics.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_lw_cloud_optics.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_sw_gas_optics.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_sw_cloud_optics.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_sw_aerosol_optics.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_lw_rte.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_sw_rte.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_lw_aerosol_optics.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_setup.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_pre.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_lw_pre.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_sw_pre.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_lw_post.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_lw_cloud_sampling.F90',
+    'FV3/ccpp/physics/physics/rrtmgp_sw_cloud_sampling.F90',
+    'FV3/ccpp/physics/physics/GFS_cloud_diagnostics.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_gfdlmp_pre.F90',
+    'FV3/ccpp/physics/physics/GFS_rrtmgp_zhaocarr_pre.F90',
     'FV3/ccpp/physics/physics/GFS_rrtmgp_sw_post.F90'
     ]
 
@@ -335,13 +339,6 @@ TYPEDEFS_SOURCEFILE = '{build_dir}/ccpp/physics/CCPP_TYPEDEFS.sh'
 SCHEMES_MAKEFILE   = '{build_dir}/ccpp/physics/CCPP_SCHEMES.mk'
 SCHEMES_CMAKEFILE  = '{build_dir}/ccpp/physics/CCPP_SCHEMES.cmake'
 SCHEMES_SOURCEFILE = '{build_dir}/ccpp/physics/CCPP_SCHEMES.sh'
-
-# CCPP host cap in which to insert the ccpp_field_add statements;
-# determines the directory to place ccpp_{modules,fields}.inc
-TARGET_FILES = [
-    'FV3/atmos_cubed_sphere/driver/fvGFS/atmosphere.F90',
-    'FV3/ccpp/driver/CCPP_Driver.F90',
-    ]
 
 # Auto-generated makefile/cmakefile snippets that contain all caps
 CAPS_MAKEFILE   = '{build_dir}/ccpp/physics/CCPP_CAPS.mk'
@@ -453,12 +450,6 @@ OPTIONAL_ARGUMENTS = {
     #'subroutine_name_2' : [ 'var1', 'var3'],
     }
 
-# Names of Fortran include files in the host model cap (do not change);
-# both files will be written to the directory of each target file, only
-# used by the dynamic builds
-MODULE_INCLUDE_FILE = 'ccpp_modules_{set}.inc'
-FIELDS_INCLUDE_FILE = 'ccpp_fields_{set}.inc'
-
 # Directory where to write static API to
 STATIC_API_DIR = '{build_dir}/ccpp/physics'
 STATIC_API_SRCFILE = '{build_dir}/ccpp/physics/CCPP_STATIC_API.sh'
@@ -471,17 +462,3 @@ HTML_VARTABLE_FILE = '{build_dir}/ccpp/physics/CCPP_VARIABLES_FV3.html'
 
 # LaTeX document containing the provided vs requested CCPP variables
 LATEX_VARTABLE_FILE = '{build_dir}/ccpp/framework/doc/DevelopersGuide/CCPP_VARIABLES_FV3.tex'
-
-
-###############################################################################
-# Template code to generate include files                                     #
-###############################################################################
-
-# Name of the CCPP data structure in the host model cap;
-# in the case of FV3, this is a 2-dimensional array with
-# the number of blocks as the first and the number of
-# OpenMP threads as the second dimension; nb is the loop
-# index for the current block, nt for the current thread.
-# Internally, the model uses an associate construct to
-# reference cdata(nb,nt) with cdata (recommended).
-CCPP_DATA_STRUCTURE = 'cdata'
