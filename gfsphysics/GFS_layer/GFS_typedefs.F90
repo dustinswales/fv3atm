@@ -655,8 +655,8 @@ module GFS_typedefs
     integer              :: iems            !< use fixed value of 1.0
     integer              :: iaer            !< default aerosol effect in sw only
     integer              :: icliq_sw        !< sw optical property for liquid clouds
-    integer              :: iovr_sw         !< sw: max-random overlap clouds
-    integer              :: iovr_lw         !< lw: max-random overlap clouds
+    integer              :: iovr_sw         !< sw cloud overlap method
+    integer              :: iovr_lw         !< lw cloud overlap method
     integer              :: ictm            !< ictm=0 => use data at initial cond time, if not
                                             !<           available; use latest; no extrapolation.
                                             !< ictm=1 => use data at the forecast time, if not
@@ -713,6 +713,13 @@ module GFS_typedefs
     integer              :: imp_physics_zhao_carr_pdf = 98 !< choice of Zhao-Carr microphysics scheme with PDF clouds
     integer              :: imp_physics_mg = 10            !< choice of Morrison-Gettelman microphysics scheme
     integer              :: imp_physics_fer_hires = 15     !< choice of Ferrier-Aligo microphysics scheme
+    ;
+    integer              :: iovr_rand    = 0 !< choice of cloud-overlap: random
+    integer              :: iovr_maxrand = 1 !< choice of cloud-overlap: maximum random
+    integer              :: iovr_max     = 2 !< choice of cloud-overlap: maximum
+    integer              :: iovr_dcorr   = 3 !< choice of cloud-overlap: decorrelation length
+    integer              :: iovr_exp     = 4 !< choice of cloud-overlap: exponential
+    integer              :: iovr_exprand = 5 !< choice of cloud-overlap: exponential random
     !--- Z-C microphysical parameters
     real(kind=kind_phys) :: psautco(2)         !< [in] auto conversion coeff from ice to snow
     real(kind=kind_phys) :: prautco(2)         !< [in] auto conversion coeff from cloud to rain
@@ -4489,22 +4496,22 @@ module GFS_typedefs
       if (Model%ccnorm)      print *,' Cloud condensate normalized by cloud cover for radiation'
 
       print *,' Radiative heating calculated at',Model%levr, ' layers'
-      if (Model%iovr_sw == 0) then
+      if (Model%iovr_sw == Model%iovr_rand) then
         print *,' random cloud overlap for Shortwave IOVR_SW=',Model%iovr_sw
       else
         print *,' max-random cloud overlap for Shortwave IOVR_SW=',Model%iovr_sw
       endif
-      if (Model%iovr_lw == 0) then
+      if (Model%iovr_lw == Model%iovr_rand) then
         print *,' random cloud overlap for Longwave IOVR_LW=',Model%iovr_lw
       else
         print *,' max-random cloud overlap for Longwave IOVR_LW=',Model%iovr_lw
       endif
-      if (Model%isubc_sw == 0) then
+      if (Model%isubc_sw == Model%iovr_rand) then
         print *,' no sub-grid cloud for Shortwave ISUBC_SW=',Model%isubc_sw
       else
         print *,' sub-grid cloud for Shortwave ISUBC_SW=',Model%isubc_sw
       endif
-      if (Model%isubc_lw == 0) then
+      if (Model%isubc_lw == Model%iovr_rand) then
         print *,' no sub-grid cloud for Longwave ISUBC_LW=',Model%isubc_lw
       else
         print *,' sub-grid cloud for Longwave ISUBC_LW=',Model%isubc_lw
