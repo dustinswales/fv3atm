@@ -657,6 +657,7 @@ module GFS_typedefs
     integer              :: icliq_sw        !< sw optical property for liquid clouds
     integer              :: iovr_sw         !< sw cloud overlap method
     integer              :: iovr_lw         !< lw cloud overlap method
+    integer              :: iovr            !< max-random overlap clouds for sw & lw (maximum of both)
     integer              :: ictm            !< ictm=0 => use data at initial cond time, if not
                                             !<           available; use latest; no extrapolation.
                                             !< ictm=1 => use data at the forecast time, if not
