@@ -9735,6 +9735,13 @@
   dimensions = ()
   type = real
   kind = kind_phys
+[con_mincf]
+  standard_name = minimum_value_of_cloud_fraction_used_in_radiation
+  long_name = minimum cloud fraction for all sky calculation
+  units = none
+  dimensions = ()
+  type = real
+  kind = kind_phys
 [con_omega]
   standard_name = angular_velocity_of_earth
   long_name = angular velocity of earth

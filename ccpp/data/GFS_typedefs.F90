@@ -9,7 +9,7 @@ module GFS_typedefs
                                        con_csol, con_epsqs, con_rocp, con_rog,         &
                                        con_omega, con_rerth, con_psat, karman, rainmin,&
                                        con_c, con_plnk, con_boltz, con_solr_2008,      &
-                                       con_solr_2002, con_thgni
+                                       con_solr_2002, con_thgni, con_mincf
 
    use module_radsw_parameters,  only: topfsw_type, sfcfsw_type
    use module_radlw_parameters,  only: topflw_type, sfcflw_type
