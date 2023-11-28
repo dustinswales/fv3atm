@@ -3187,7 +3187,7 @@
   name = CCPP_typedefs
   type = module
   relative_path = ../physics/physics
-  dependencies = machine.F,ozne_def.f,radlw_param.f,radsw_param.f
+  dependencies = machine.F,radlw_param.f,radsw_param.f
 
 [ccpp-arg-table]
   name = CCPP_typedefs
