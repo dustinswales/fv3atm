@@ -37,6 +37,12 @@ set(USE_GFSL63  ON)
 if(MOVING_NEST)
   set(MOVING_NEST ON)
 endif()
+
+if(NO_QUAD_PRECISION)
+  message(STATUS "Compile FV3ATM w/o quadruple precision when using Nvidia.")
+  add_definitions(-DNO_QUAD_PRECISION)
+endif()
+
 add_subdirectory(atmos_cubed_sphere)
 
 ###############################################################################

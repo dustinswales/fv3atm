@@ -4153,14 +4153,14 @@ module GFS_typedefs
     enddo
 
 !--- read in the namelist
-#ifdef INTERNAL_FILE_NML
-    ! allocate required to work around GNU compiler bug 100886 https://gcc.gnu.org/bugzilla/show_bug.cgi?id=100886
-    allocate(Model%input_nml_file, mold=input_nml_file)
-    Model%input_nml_file => input_nml_file
-    read(Model%input_nml_file, nml=gfs_physics_nml)
-    ! Set length (number of lines) in namelist for internal reads
-    Model%input_nml_file_length = size(Model%input_nml_file)
-#else
+!#ifdef INTERNAL_FILE_NML
+!    ! allocate required to work around GNU compiler bug 100886 https://gcc.gnu.org/bugzilla/show_bug.cgi?id=100886
+!    allocate(Model%input_nml_file, mold=input_nml_file)
+!    Model%input_nml_file => input_nml_file
+!    read(Model%input_nml_file, nml=gfs_physics_nml)
+!    ! Set length (number of lines) in namelist for internal reads
+!    Model%input_nml_file_length = size(Model%input_nml_file)
+!#else
     inquire (file=trim(fn_nml), exist=exists)
     if (.not. exists) then
       write(6,*) 'GFS_namelist_read:: namelist file: ',trim(fn_nml),' does not exist'
@@ -4173,7 +4173,7 @@ module GFS_typedefs
     close (nlunit)
     ! Set length (number of lines) in namelist for internal reads
     Model%input_nml_file_length = 0
-#endif
+!#endif
 !--- write version number and namelist to log file ---
     if (me == master) then
       write(logunit, '(a80)') '================================================================================'
