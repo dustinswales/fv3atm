@@ -768,12 +768,7 @@ contains
        allocate (Interstitial%cld_rwp              (IM, Model%levs))
        allocate (Interstitial%cld_rerain           (IM, Model%levs))
        allocate (Interstitial%precip_frac          (IM, Model%levs))
-       allocate (Interstitial%cld_cnv_frac         (IM, Model%levs))
        allocate (Interstitial%cnv_cloud_overlap_param(IM, Model%levs))
-       allocate (Interstitial%cld_cnv_lwp          (IM, Model%levs))
-       allocate (Interstitial%cld_cnv_reliq        (IM, Model%levs))
-       allocate (Interstitial%cld_cnv_iwp          (IM, Model%levs))
-       allocate (Interstitial%cld_cnv_reice        (IM, Model%levs))
        allocate (Interstitial%cld_pbl_lwp          (IM, Model%levs))
        allocate (Interstitial%cld_pbl_reliq        (IM, Model%levs))
        allocate (Interstitial%cld_pbl_iwp          (IM, Model%levs))
@@ -794,8 +789,13 @@ contains
        allocate (Interstitial%vmr_ch4              (IM, Model%levs))
        allocate (Interstitial%vmr_n2o              (IM, Model%levs))
        allocate (Interstitial%vmr_co2              (IM, Model%levs))
-
     end if
+    allocate (Interstitial%cld_cnv_frac         (IM, Model%levs))
+    allocate (Interstitial%cld_cnv_lwp          (IM, Model%levs))
+    allocate (Interstitial%cld_cnv_reliq        (IM, Model%levs))
+    allocate (Interstitial%cld_cnv_iwp          (IM, Model%levs))
+    allocate (Interstitial%cld_cnv_reice        (IM, Model%levs))
+       
 
 ! UGWP common
     allocate (Interstitial%tau_mtb         (IM))
@@ -1178,12 +1178,7 @@ contains
       Interstitial%cld_rwp              = clear_val
       Interstitial%cld_rerain           = clear_val
       Interstitial%precip_frac          = clear_val
-      Interstitial%cld_cnv_frac         = clear_val
       Interstitial%cnv_cloud_overlap_param  = clear_val
-      Interstitial%cld_cnv_lwp          = clear_val
-      Interstitial%cld_cnv_reliq        = clear_val
-      Interstitial%cld_cnv_iwp          = clear_val
-      Interstitial%cld_cnv_reice        = clear_val
       Interstitial%cld_pbl_lwp          = clear_val
       Interstitial%cld_pbl_reliq        = clear_val
       Interstitial%cld_pbl_iwp          = clear_val
@@ -1211,6 +1206,11 @@ contains
       Interstitial%flxprf_sw%upfx0      = clear_val
       Interstitial%flxprf_sw%dnfx0      = clear_val
     end if
+    Interstitial%cld_cnv_frac           = clear_val
+    Interstitial%cld_cnv_lwp            = clear_val
+    Interstitial%cld_cnv_reliq          = clear_val
+    Interstitial%cld_cnv_iwp            = clear_val
+    Interstitial%cld_cnv_reice          = clear_val
     !
   end subroutine gfs_interstitial_rad_reset
 

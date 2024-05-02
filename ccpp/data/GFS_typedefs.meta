@@ -4347,6 +4347,18 @@
   units = km
   dimensions = ()
   type = real
+[add_cnvcld_sw]
+  standard_name = flag_to_include_convective_condensate_in_shortwave_radiation
+  long_name = flag to include convective condensate in shortwave radiation calculation
+  units = flag
+  dimensions = ()
+  type = logical
+[add_cnvcld_lw]
+  standard_name = flag_to_include_convective_condensate_in_longwave_radiation
+  long_name = flag to include convective condensate in longwave radiation calculation
+  units = flag
+  dimensions = ()
+  type = logical
 [psautco]
   standard_name = autoconversion_to_snow_coefficient
   long_name = auto conversion coeff from ice to snow

@@ -909,7 +909,10 @@ module GFS_typedefs
     logical              :: top_at_1                !< Vertical ordering flag.
     integer              :: iSFC                    !< Vertical index for surface
     integer              :: iTOA                    !< Vertical index for TOA
-
+!--- RRTMG convective cloud
+    logical              :: add_cnvcld_lw           !< Include radiatively active convective cloud in longwave
+    logical              :: add_cnvcld_sw           !< Include radiatively active convective cloud in shortwave
+    
 !--- microphysical switch
     logical              :: convert_dry_rho = .true.       !< flag for converting mass/number concentrations from moist to dry
                                                            !< for physics options that expect dry mass/number concentrations;
@@ -3474,6 +3477,9 @@ module GFS_typedefs
     integer              :: rrtmgp_lw_phys_blksz= 1          !< Number of columns for RRTMGP LW scheme to process at each instance.
     integer              :: rrtmgp_sw_phys_blksz= 1          !< Number of columns for RRTMGP SW scheme to process at each instance.
     logical              :: doGP_smearclds      = .true.     !< If true, include implicit SubGridScale clouds in RRTMGP
+    logical              :: add_cnvcld_lw       = .false.    !< Include radiatively active convective cloud in longwave
+    logical              :: add_cnvcld_sw       = .false.    !< Include radiatively active convective cloud in shortwave
+    
 !--- Z-C microphysical parameters
     integer              :: imp_physics       =  99                !< choice of cloud scheme
     real(kind=kind_phys) :: psautco(2)        = (/6.0d-4,3.0d-4/)  !< [in] auto conversion coeff from ice to snow
@@ -3999,6 +4005,7 @@ module GFS_typedefs
                                isot, iems, iaer, icliq_sw, iovr, ictm, isubc_sw,            &
                                isubc_lw, lcrick, lcnorm, lwhtr, swhtr,                      &
                                nhfrad, idcor, dcorr_con,                                    &
+                               add_cnvcld_lw, add_cnvcld_sw,
                           ! --- RRTMGP
                                do_RRTMGP, active_gases, nGases, rrtmgp_root,                &
                                lw_file_gas, lw_file_clouds, rrtmgp_nBandsLW, rrtmgp_nGptsLW,&
@@ -4500,6 +4507,10 @@ module GFS_typedefs
     Model%lrseeds          = lrseeds
     Model%nrstreams        = nrstreams
     Model%lextop           = (ltp > 0)
+
+    ! RRTMG Convective cloud
+    Model%add_cnvcld_lw    = add_cnvcld_lw
+    Model%add_cnvcld_sw	   = add_cnvcld_sw
 
     ! RRTMGP
     Model%do_RRTMGP           = do_RRTMGP
