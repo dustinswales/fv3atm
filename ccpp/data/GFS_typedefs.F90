@@ -1165,6 +1165,7 @@ module GFS_typedefs
     logical              :: add_cnvcld_sw     !< If true, include convective cloud in shortwave radiation.
     logical              :: scale_ccld_cndste !< If true, scale the convective cloud condensate by convective updraft fraction.
     logical              :: scale_ccld_optics !< If true, scale the convective cloud optical properties by convective updraft fraction.
+    logical              :: do_phasepart      !< If true, partition the total convective cloud condensate into liquid/ice.
     
     logical              :: random_clds     !< flag controls whether clouds are random
     logical              :: shal_cnv        !< flag for calling shallow convection
@@ -3692,6 +3693,7 @@ module GFS_typedefs
     logical              :: add_cnvcld_sw     = .false.               !< If true, include convective cloud in shortwave radiation.
     logical              :: scale_ccld_cndste = .false.               !< If true, scale the convective cloud condensate by convective updraft fraction.
     logical              :: scale_ccld_optics = .false.               !< If true, scale the convective cloud optical properties by convective updraft fraction.
+    logical              :: do_phasepart      = .true.                !< If true, partition the total convective cloud condensate into liquid/ice.
     logical              :: random_clds    = .false.                  !< flag controls whether clouds are random
     logical              :: shal_cnv       = .false.                  !< flag for calling shallow convection
     integer              :: imfshalcnv     =  1                       !< flag for mass-flux shallow convection scheme
@@ -4010,7 +4012,7 @@ module GFS_typedefs
                                isubc_lw, lcrick, lcnorm, lwhtr, swhtr,                      &
                                nhfrad, idcor, dcorr_con,                                    &
                                add_cnvcld_lw, add_cnvcld_sw, scale_ccld_cndste,             &
-                               scale_ccld_optics,                                           &
+                               scale_ccld_optics, do_phasepart,                             &
                           ! --- RRTMGP
                                do_RRTMGP, active_gases, nGases, rrtmgp_root,                &
                                lw_file_gas, lw_file_clouds, rrtmgp_nBandsLW, rrtmgp_nGptsLW,&
@@ -4911,6 +4913,7 @@ module GFS_typedefs
     Model%add_cnvcld_sw     = add_cnvcld_sw
     Model%scale_ccld_cndste = scale_ccld_cndste
     Model%scale_ccld_optics = scale_ccld_optics
+    Model%do_phasepart      = do_phasepart
     Model%random_clds       = random_clds
     Model%shal_cnv          = shal_cnv
     Model%imfshalcnv        = imfshalcnv
