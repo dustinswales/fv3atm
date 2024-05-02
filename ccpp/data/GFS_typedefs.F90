@@ -909,9 +909,6 @@ module GFS_typedefs
     logical              :: top_at_1                !< Vertical ordering flag.
     integer              :: iSFC                    !< Vertical index for surface
     integer              :: iTOA                    !< Vertical index for TOA
-!--- RRTMG convective cloud
-    logical              :: add_cnvcld_lw           !< Include radiatively active convective cloud in longwave
-    logical              :: add_cnvcld_sw           !< Include radiatively active convective cloud in shortwave
     
 !--- microphysical switch
     logical              :: convert_dry_rho = .true.       !< flag for converting mass/number concentrations from moist to dry
@@ -1164,6 +1161,11 @@ module GFS_typedefs
     logical              :: lseaspray       !< flag for sea spray parameterization
     logical              :: cnvcld
     logical              :: xr_cnvcld       !< flag for adding suspended convective clouds to Xu-Randall cloud fraction
+    logical              :: add_cnvcld_lw     !< If true, include convective cloud in longwave radiation.
+    logical              :: add_cnvcld_sw     !< If true, include convective cloud in shortwave radiation.
+    logical              :: scale_ccld_cndste !< If true, scale the convective cloud condensate by convective updraft fraction.
+    logical              :: scale_ccld_optics !< If true, scale the convective cloud optical properties by convective updraft fraction.
+    
     logical              :: random_clds     !< flag controls whether clouds are random
     logical              :: shal_cnv        !< flag for calling shallow convection
     logical              :: do_deep         !< whether to do deep convection
@@ -3477,9 +3479,7 @@ module GFS_typedefs
     integer              :: rrtmgp_lw_phys_blksz= 1          !< Number of columns for RRTMGP LW scheme to process at each instance.
     integer              :: rrtmgp_sw_phys_blksz= 1          !< Number of columns for RRTMGP SW scheme to process at each instance.
     logical              :: doGP_smearclds      = .true.     !< If true, include implicit SubGridScale clouds in RRTMGP
-    logical              :: add_cnvcld_lw       = .false.    !< Include radiatively active convective cloud in longwave
-    logical              :: add_cnvcld_sw       = .false.    !< Include radiatively active convective cloud in shortwave
-    
+
 !--- Z-C microphysical parameters
     integer              :: imp_physics       =  99                !< choice of cloud scheme
     real(kind=kind_phys) :: psautco(2)        = (/6.0d-4,3.0d-4/)  !< [in] auto conversion coeff from ice to snow
@@ -3688,6 +3688,10 @@ module GFS_typedefs
     logical              :: lseaspray      = .false.                  !< flag for sea spray parameterization
     logical              :: cnvcld         = .false.
     logical              :: xr_cnvcld      = .true.                   !< flag for including suspended convective clouds in Xu-Randall cloud fraction
+    logical              :: add_cnvcld_lw     = .false.               !< If true, include convective cloud in longwave radiation.
+    logical              :: add_cnvcld_sw     = .false.               !< If true, include convective cloud in shortwave radiation.
+    logical              :: scale_ccld_cndste = .false.               !< If true, scale the convective cloud condensate by convective updraft fraction.
+    logical              :: scale_ccld_optics = .false.               !< If true, scale the convective cloud optical properties by convective updraft fraction.
     logical              :: random_clds    = .false.                  !< flag controls whether clouds are random
     logical              :: shal_cnv       = .false.                  !< flag for calling shallow convection
     integer              :: imfshalcnv     =  1                       !< flag for mass-flux shallow convection scheme
@@ -4005,7 +4009,8 @@ module GFS_typedefs
                                isot, iems, iaer, icliq_sw, iovr, ictm, isubc_sw,            &
                                isubc_lw, lcrick, lcnorm, lwhtr, swhtr,                      &
                                nhfrad, idcor, dcorr_con,                                    &
-                               add_cnvcld_lw, add_cnvcld_sw,
+                               add_cnvcld_lw, add_cnvcld_sw, scale_ccld_cndste,             &
+                               scale_ccld_optics,                                           &
                           ! --- RRTMGP
                                do_RRTMGP, active_gases, nGases, rrtmgp_root,                &
                                lw_file_gas, lw_file_clouds, rrtmgp_nBandsLW, rrtmgp_nGptsLW,&
@@ -4508,10 +4513,6 @@ module GFS_typedefs
     Model%nrstreams        = nrstreams
     Model%lextop           = (ltp > 0)
 
-    ! RRTMG Convective cloud
-    Model%add_cnvcld_lw    = add_cnvcld_lw
-    Model%add_cnvcld_sw	   = add_cnvcld_sw
-
     ! RRTMGP
     Model%do_RRTMGP           = do_RRTMGP
     Model%rrtmgp_nrghice      = rrtmgp_nrghice
@@ -4906,6 +4907,10 @@ module GFS_typedefs
     Model%lseaspray         = lseaspray
     Model%cnvcld            = cnvcld
     Model%xr_cnvcld         = xr_cnvcld
+    Model%add_cnvcld_lw     = add_cnvcld_lw
+    Model%add_cnvcld_sw     = add_cnvcld_sw
+    Model%scale_ccld_cndste = scale_ccld_cndste
+    Model%scale_ccld_optics = scale_ccld_optics
     Model%random_clds       = random_clds
     Model%shal_cnv          = shal_cnv
     Model%imfshalcnv        = imfshalcnv

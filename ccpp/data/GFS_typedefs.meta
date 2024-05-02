@@ -4359,6 +4359,18 @@
   units = flag
   dimensions = ()
   type = logical
+[scale_ccld_cndste]
+  standard_name = flag_to_scale_convective_condensate_in_radiation_by_convective_updraft_fraction
+  long_name = flag to scale convective condensate see by radiation using the convective updraft fraction
+  units = flag
+  dimensions = ()
+  type = logical
+[scale_ccld_optics]
+  standard_name = flag_to_scale_convective_cloud_optics_by_convective_updraft_fraction
+  long_name = flag to scale convective cloud optics see by radiation using the convective updraft fraction
+  units = flag
+  dimensions = ()
+  type = logical
 [psautco]
   standard_name = autoconversion_to_snow_coefficient
   long_name = auto conversion coeff from ice to snow
