@@ -6208,7 +6208,15 @@ module GFS_typedefs
                  ' ntot3d=',    Model%ntot3d,    ' ntot2d=',   Model%ntot2d,    &
                  ' shocaftcnv=',Model%shocaftcnv,' indcld=',   Model%indcld,    &
                  ' shoc_parm=', Model%shoc_parm,                                &
-                 ' ncnvw=',     Model%ncnvw,     ' ncnvc=',     Model%ncnvc
+                 ' ncnvw=',     Model%ncnvw,     ' ncnvc=',    Model%ncnvc,     &
+                 ' --------------------------------------------------------- ', &
+                 '            Convective-cloud/Radiation coupling',             &
+                 ' --------------------------------------------------------- ', &
+                 ' add_cnvcld_lw     = ', Model%add_cnvcld_lw,                  &
+                 ' add_cnvcld_sw     = ', Model%add_cnvcld_sw,                  &
+                 ' scale_ccld_cndste = ', Model%scale_ccld_cndste,              &
+                 ' scale_ccld_optics = ', Model%scale_ccld_optics,              &
+                 ' do_phasepart      = ', Model%do_phasepart
 
 !--- END CODE FROM COMPNS_PHYSICS
 
