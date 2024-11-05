@@ -5463,6 +5463,99 @@ module GFS_diagnostics
     enddo
   enddo
 
+  ! COSP diagnostics
+  if (Model%do_cosp) then
+     ! COSP ISCCP diagnostics
+     if (Model%do_cosp_isccp) then
+        ! ISCCP mean cloud fraction
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CLDTOT_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud fraction'
+        ExtDiag(idx)%unit = 'frac'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%cldtot_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP mean cloud albedo
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+	ExtDiag(idx)%name = 'MEANCLDALB_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud albedo'
+        ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%meancldalb_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP mean cloud top pressure
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'MEANPTOP_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud top pressure '
+        ExtDiag(idx)%unit = 'Pa'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%meanptop_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP mean cloud optical depth
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'MEANTAU_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud optical depth'
+        ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%meantau_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP mean cloud brightness temperature
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'MEANTB_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature'
+        ExtDiag(idx)%unit = 'K'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%meantb_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP mean cloud brightness temperature for clear sky conditions
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'MEANTBCLR_ISCCP'
+        ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature for clear sky conditions'
+        ExtDiag(idx)%unit = 'K'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%time_avg = .TRUE.
+        ExtDiag(idx)%time_avg_kind = 'rad_lw'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var2 => IntDiag%meantbclr_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
+        enddo
+        ! ISCCP cloud optical depth
+        ! ISCCP cloud top pressure
+     endif
+  endif
+  
   end subroutine GFS_externaldiag_populate
 
   subroutine clm_lake_externaldiag_populate(ExtDiag, Model, Sfcprop, idx, cn_one, nblks)
