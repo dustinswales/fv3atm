@@ -2198,22 +2198,23 @@ module GFS_typedefs
 
     ! COSP
     ! ISCCP
-    real (kind=kind_phys), pointer :: f1isccp_cosp(:,:,:) => null()
-    real (kind=kind_phys), pointer :: cldtot_isccp(:)     => null()
-    real (kind=kind_phys), pointer :: meancldalb_isccp(:) => null()
-    real (kind=kind_phys), pointer :: meanptop_isccp(:)   => null()
-    real (kind=kind_phys), pointer :: meantau_isccp(:)    => null()
-    real (kind=kind_phys), pointer :: meantb_isccp(:)     => null()
-    real (kind=kind_phys), pointer :: meantbclr_isccp(:)  => null()
-    real (kind=kind_phys), pointer :: tau_isccp(:,:)      => null()
-    real (kind=kind_phys), pointer :: cldptop_isccp(:,:)  => null()
+    real (kind=kind_phys), pointer :: f1isccp_cosp(:,:,:)   => null()
+    real (kind=kind_phys), pointer :: f1isccp_cosp_avg(:,:) => null()
+    real (kind=kind_phys), pointer :: cldtot_isccp(:)       => null()
+    real (kind=kind_phys), pointer :: meancldalb_isccp(:)   => null()
+    real (kind=kind_phys), pointer :: meanptop_isccp(:)     => null()
+    real (kind=kind_phys), pointer :: meantau_isccp(:)      => null()
+    real (kind=kind_phys), pointer :: meantb_isccp(:)       => null()
+    real (kind=kind_phys), pointer :: meantbclr_isccp(:)    => null()
+    real (kind=kind_phys), pointer :: tau_isccp(:,:)        => null()
+    real (kind=kind_phys), pointer :: cldptop_isccp(:,:)    => null()
     ! MISR
-    real (kind=kind_phys), pointer :: f1misr_cosp(:,:,:)  => null()
+    real (kind=kind_phys), pointer :: f1misr_cosp(:,:,:)    => null()
 
     !--- Lightning threat indices
-    real (kind=kind_phys), pointer :: ltg1_max(:)        => null()  !
-    real (kind=kind_phys), pointer :: ltg2_max(:)        => null()  !
-    real (kind=kind_phys), pointer :: ltg3_max(:)        => null()  !
+    real (kind=kind_phys), pointer :: ltg1_max(:)           => null()  !
+    real (kind=kind_phys), pointer :: ltg2_max(:)           => null()  !
+    real (kind=kind_phys), pointer :: ltg3_max(:)           => null()  !
 
     !--- NRL Ozone physics diagnostics
     real (kind=kind_phys), pointer :: do3_dt_prd(:,:)  => null()
@@ -8086,6 +8087,7 @@ module GFS_typedefs
     if (Model%do_cosp) then
        if (Model%do_cosp_isccp) then
           allocate(Diag%f1isccp_cosp(IM,Model%n_isccp_tau_bins, Model%n_isccp_pres_bins), &
+                   Diag%f1isccp_cosp_avg(Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),&
                    Diag%cldtot_isccp(IM),                                   &
                    Diag%meancldalb_isccp(IM),                               &
                    Diag%meanptop_isccp(IM),                                 &
@@ -8096,7 +8098,7 @@ module GFS_typedefs
                    Diag%cldptop_isccp(IM,Model%cosp_nsubcol))
        endif
        if (Model%do_cosp_misr) then
-          allocate(Diag%f1isccp_cosp(IM,Model%n_misr_tau_bins, Model%n_misr_hgt_bins))
+          allocate(Diag%f1misr_cosp(IM,Model%n_misr_tau_bins, Model%n_misr_hgt_bins))
        endif
     endif
 
@@ -8123,16 +8125,26 @@ module GFS_typedefs
     Diag%topflw%upfxc = zero
     Diag%topflw%upfx0 = zero
 
-    Diag%f1isccp_cosp     = zero
-    Diag%cldtot_isccp     = zero
-    Diag%meancldalb_isccp = zero
-    Diag%meanptop_isccp   = zero
-    Diag%meantau_isccp    = zero
-    Diag%meantb_isccp     = zero
-    Diag%meantbclr_isccp  = zero
-    Diag%tau_isccp        = zero
-    Diag%cldptop_isccp    = zero
-    Diag%f1misr_cosp      = zero
+    ! COSP
+    if (Model%do_cosp) then
+       ! ISCCP
+       if (Model%do_cosp_isccp) then
+          Diag%f1isccp_cosp     = clear_val
+          Diag%f1isccp_cosp_avg = clear_val
+          Diag%cldtot_isccp     = clear_val
+          Diag%meancldalb_isccp = clear_val
+          Diag%meanptop_isccp   = clear_val
+          Diag%meantau_isccp    = clear_val
+          Diag%meantb_isccp     = clear_val
+          Diag%meantbclr_isccp  = clear_val
+          Diag%tau_isccp        = clear_val
+          Diag%cldptop_isccp    = clear_val
+       endif
+       ! MISR
+       if (Model%do_cosp_misr) then
+          Diag%f1misr_cosp      = clear_val
+       endif
+    endif
     
   end subroutine diag_rad_zero
 
@@ -8404,26 +8416,6 @@ module GFS_typedefs
        Diag%ltg1_max = zero
        Diag%ltg2_max = zero
        Diag%ltg3_max = zero
-    endif
-
-    ! COSP
-    if (Model%do_cosp) then
-       ! ISCCP Simulator
-       if (Model%do_cosp_isccp) then
-          Diag%f1isccp_cosp     = zero
-          Diag%cldtot_isccp     = zero
-          Diag%meancldalb_isccp = zero
-          Diag%meanptop_isccp   = zero
-          Diag%meantau_isccp    = zero
-          Diag%meantb_isccp     = zero
-          Diag%meantbclr_isccp  = zero
-          Diag%tau_isccp        = zero
-          Diag%cldptop_isccp    = zero
-       endif
-       ! MISR simulator
-       if (Model%do_cosp_misr) then
-          Diag%f1misr_cosp     = zero
-       endif
     endif
 
   end subroutine diag_phys_zero

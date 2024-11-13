@@ -51,6 +51,10 @@ module fv3atm_history_io_mod
 
     integer :: isco=0,ieco=0,jsco=0,jeco=0,num_axes_phys=0
     integer :: ncld=0, nsoil=0, nsoil_lsm=0, imp_physics=0, landsfcmdl=0
+    integer :: cosp_ntau_isccp=0, cosp_nprs_isccp=0
+    integer :: cosp_ntau_modis=0, cosp_nprs_modis=0
+    integer :: cosp_ntau_misr=0,  cosp_nhgt_misr=0
+    integer :: cosp_nsubcol=0, cosp_nlvgrid=0
     real(4) :: fhzero=0.
     real(4) :: dtp=0
     integer,dimension(:),        pointer         :: levo => null()
@@ -61,6 +65,7 @@ module fv3atm_history_io_mod
     real(4), dimension(:,:,:),   pointer         :: buffer_phys_bl => null()
     real(4), dimension(:,:,:),   pointer         :: buffer_phys_nb => null()
     real(4), dimension(:,:,:,:), pointer         :: buffer_phys_windvect => null()
+    real(4), dimension(:,:,:,:,:), pointer       :: buffer_phys_cosphist => null()
     real(kind=kind_phys),dimension(:,:),pointer  :: lon => null()
     real(kind=kind_phys),dimension(:,:),pointer  :: lat => null()
     real(kind=kind_phys),dimension(:,:),pointer  :: uwork => null()
@@ -75,6 +80,7 @@ module fv3atm_history_io_mod
     procedure :: output => history_type_output
     procedure :: store_data => history_type_store_data
     procedure :: store_data3D => history_type_store_data3D
+    procedure :: store_dataCOSP => history_type_store_dataCOSP
 #ifdef use_WRTCOMP
     procedure :: bundle_setup => history_type_bundle_setup
     procedure :: add_field_to_phybundle => history_type_add_field_to_phybundle
@@ -192,6 +198,15 @@ CONTAINS
     hist%dtp    = Model%dtp
     hist%imp_physics  = Model%imp_physics
     hist%landsfcmdl  = Model%lsm
+    ! COSP diagnostics
+    hist%cosp_ntau_isccp = Model%n_isccp_tau_bins
+    hist%cosp_nprs_isccp = Model%n_isccp_pres_bins
+    hist%cosp_ntau_modis = Model%n_modis_tau_bins
+    hist%cosp_nprs_modis = Model%n_modis_pres_bins
+    hist%cosp_ntau_misr  = Model%n_misr_tau_bins
+    hist%cosp_nhgt_misr  = Model%n_misr_hgt_bins
+    hist%cosp_nsubcol    = Model%cosp_nsubcol
+    hist%cosp_nlvgrid    = Model%cosp_nlvgrid
     !    print *,'in fv3atm_diag_register,hist%ncld=',Model%ncld,Model%lsoil,Model%imp_physics, &
     !      ' hist%dtp=',hist%dtp,' hist%landsfcmdl=',Model%lsm
     !
@@ -260,6 +275,16 @@ CONTAINS
             endif
           endif
           hist%num_axes_phys = 3
+        else if (diag(idx)%axes == 4) then
+           hist%levo(idx) = 1
+           if( index(trim(Diag(idx)%intpl_method),'bilinear') > 0 ) then
+              nrgst_bl = nrgst_bl + 1
+              hist%nstt(idx) = nrgst_bl
+           else if (trim(Diag(idx)%intpl_method) == 'nearest_stod' ) then
+              nrgst_nb = nrgst_nb + 1
+              hist%nstt(idx) = nrgst_nb
+           endif
+           hist%num_axes_phys = hist%num_axes_phys + 2
         endif
       endif
 
@@ -268,9 +293,11 @@ CONTAINS
     allocate(hist%buffer_phys_bl(hist%isco:hist%ieco,hist%jsco:hist%jeco,nrgst_bl))
     allocate(hist%buffer_phys_nb(hist%isco:hist%ieco,hist%jsco:hist%jeco,nrgst_nb))
     allocate(hist%buffer_phys_windvect(3,hist%isco:hist%ieco,hist%jsco:hist%jeco,nrgst_vctbl))
+    allocate(hist%buffer_phys_cosphist(hist%isco:hist%ieco,hist%jsco:hist%jeco,hist%cosp_ntau_isccp,hist%cosp_nprs_isccp,nrgst_bl))
     hist%buffer_phys_bl = zero
     hist%buffer_phys_nb = zero
     hist%buffer_phys_windvect = zero
+    hist%buffer_phys_cosphist = zero
     if(mpp_pe() == mpp_root_pe()) print *,'in fv3atm_diag_register, nrgst_bl=',nrgst_bl,' nrgst_nb=',nrgst_nb, &
          ' nrgst_vctbl=',nrgst_vctbl, 'hist%isco=',hist%isco,hist%ieco,'hist%jsco=',hist%jsco,hist%jeco,' hist%num_axes_phys=', hist%num_axes_phys
 
@@ -300,9 +327,11 @@ CONTAINS
 #ifdef CCPP_32BIT
     real, dimension(nx,ny)      :: var2
     real, dimension(:,:,:), allocatable :: var3
+    real, dimension(:,:,:,:), allocatable :: var4
 #else
     real(kind=kind_phys), dimension(nx,ny)      :: var2
     real(kind=kind_phys), dimension(:,:,:), allocatable :: var3
+    real(kind=kind_phys), dimension(:,:,:,:), allocatable :: var4
 #endif
     real(kind=kind_phys) :: rtime_int, rtime_intfull, lcnvfac
     real(kind=kind_phys) :: rtime_radsw, rtime_radlw
@@ -480,7 +509,19 @@ CONTAINS
 
           call hist%store_data3D(Diag(idx)%id, var3, Time, idx, Diag(idx)%intpl_method, Diag(idx)%name)
           deallocate(var3)
-
+        elseif (Diag(idx)%axes == 4) then
+           allocate(var4(nx,ny,hist%cosp_ntau_isccp,hist%cosp_nprs_isccp))
+           do j = 1, ny
+              jj = j + Atm_block%jsc -1
+              do i = 1, nx
+                 ii = i + Atm_block%isc -1
+                 nb = Atm_block%blkno(ii,jj)
+                 ix = Atm_block%ixp(ii,jj)
+                 var4(i,j,:,:) = Diag(idx)%data(nb)%var4(ix,:,:)*lcnvfac
+              enddo
+           enddo
+           call hist%store_dataCOSP(Diag(idx)%id, var4, Time, idx, Diag(idx)%intpl_method, Diag(idx)%name)
+           deallocate(var4)
         endif if_2d
       endif has_id
     end do history_loop
@@ -682,7 +723,42 @@ CONTAINS
     endif
     !
   end subroutine history_type_store_data3D
+  
+  subroutine history_type_store_dataCOSP(hist, id, work, Time, idx, intpl_method, fldname)
+    implicit none
+    class(history_type)                 :: hist
+    integer, intent(in)                 :: id
+    integer, intent(in)                 :: idx
+#ifdef CCPP_32BIT
+    real, intent(in)                    :: work(:,:,:,:)
+#else
+    real(kind=kind_phys), intent(in)    :: work(hist%ieco-hist%isco+1,hist%jeco-hist%jsco+1,hist%cosp_ntau_isccp,hist%cosp_nprs_isccp)
+#endif
+    type(time_type), intent(in)         :: Time
+    character(*), intent(in)            :: intpl_method
+    character(*), intent(in)            :: fldname
+    !
+    integer j,i,nv,i1,j1
+    logical used
+    
+    if_has_id: if( id > 0 ) then
+       if_gridcomp: if( hist%use_wrtgridcomp_output ) then
+          if_interp: if( trim(intpl_method) == 'bilinear') then
+             !$omp parallel do default(shared) private(i,j)
+             do j= hist%jsco,hist%jeco
+                do i= hist%isco,hist%ieco
+                   hist%buffer_phys_cosphist(i,j,:,:,hist%nstt(idx)) = work(i-hist%isco+1,j-hist%jsco+1,:,:)
+                enddo
+             enddo
+          end if if_interp
+       else
+          used = send_data(id, work, Time)
+       endif if_gridcomp
+    end if if_has_id
+    
+  end subroutine history_type_store_dataCOSP
 
+    
 #ifdef use_WRTCOMP
   !>@brief Sets up the ESMF bundle to use for quilt diagnostic output
   !> \section history_type%bundle_setup procedure
@@ -761,10 +837,11 @@ CONTAINS
       endif
       !    print *,'in fv_phys bundle,i=',ibdl,'outputfile=',trim(outputfile(ibdl)), &
       !      'bdl_intplmethod=',trim(bdl_intplmethod(ibdl))
-
       call ESMF_AttributeAdd(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
            attrList=(/"fhzero     ", "ncld       ", "nsoil      ",&
-           "imp_physics", "dtp        ", "landsfcmdl "/), rc=rc)
+           "imp_physics", "dtp        ", "landsfcmdl ", "ntau_isccp ", "nprs_isccp ", &
+           "ntau_modis ", "nprs_modis ", "ntau_misr  ", "nhgt_misr  ", "cosp_scol  ", &
+           "cosp_nvgrid"/), rc=rc)
 
       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
@@ -774,6 +851,38 @@ CONTAINS
 
       call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
            name="ncld", value=hist%ncld, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="ntau_isccp", value=hist%cosp_ntau_isccp, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="nprs_isccp", value=hist%cosp_nprs_isccp, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="ntau_modis", value=hist%cosp_ntau_modis, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="nprs_modis", value=hist%cosp_nprs_modis , rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="ntau_misr", value=hist%cosp_ntau_misr, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="nhgt_misr", value=hist%cosp_nhgt_misr, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="cosp_subcol", value=hist%cosp_nsubcol, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
+           name="cosp_nvgrid", value=hist%cosp_nlvgrid, rc=rc)
       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
       call ESMF_AttributeSet(phys_bundle(ibdl), convention="NetCDF", purpose="FV3", &
@@ -937,6 +1046,46 @@ CONTAINS
          name="zsoil:positive", value="down", rc=rc)
     if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
 
+    ! Add COSP diagnostic axis.
+    call ESMF_AttributeAdd(fcst_grid, convention="NetCDF", purpose="FV3",  &
+         attrList=(/"isccp_tau               ", &
+                    "isccp_tau:long_name     ", &
+                    "isccp_tau:units         ", &
+                    "isccp_tau:cartesian_axis", &
+                    "isccp_tau:positive      "/), rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_tau", valueList=(/ (i, i=1,hist%cosp_ntau_isccp) /), rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_tau:long_name", value="ISCCP CFAD optical depth bin", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_tau:units", value="%", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    !
+    call ESMF_AttributeAdd(fcst_grid, convention="NetCDF", purpose="FV3",  &
+         attrList=(/"isccp_prs               ", &
+                    "isccp_prs:long_name     ", &
+                    "isccp_prs:units         ", &
+                    "isccp_prs:cartesian_axis", &
+                    "isccp_prs:positive      "/), rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_prs", valueList=(/ (i, i=1,hist%cosp_nprs_isccp) /), rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_prs:long_name", value="ISCCP CFAD pressure bin", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_AttributeSet(fcst_grid, convention="NetCDF", purpose="FV3", &
+         name="isccp_prs:units", value="Pa", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
     !   print *,'in setup fieldbundle_phys, hist%num_axes_phys=',hist%num_axes_phys,'hist%tot_diag_idx=',hist%tot_diag_idx, &
     !       'nbdlphys=',nbdlphys
     !
@@ -1183,6 +1332,11 @@ CONTAINS
       enddo
     endif
 
+    !
+    !*** add COSP diagnostic axes.
+    if( size(axes) == 4) then
+       
+    endif
     !*** add field into bundle
     call ESMF_FieldBundleAdd(phys_bundle,(/field/), rc=rc)
     if( present(rcd)) rcd=rc

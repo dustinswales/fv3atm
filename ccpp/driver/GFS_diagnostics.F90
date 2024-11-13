@@ -24,6 +24,7 @@ module GFS_diagnostics
     real(kind=kind_phys), dimension(:),   pointer :: var2  => NULL()
     real(kind=kind_phys), dimension(:),   pointer :: var21 => NULL()
     real(kind=kind_phys), dimension(:,:), pointer :: var3  => NULL()
+    real(kind=kind_phys), dimension(:,:,:), pointer :: var4  => NULL()
   end type data_subtype
 
   !--- data type definition for use with GFDL FMS diagnostic manager until write component is working
@@ -138,13 +139,14 @@ module GFS_diagnostics
     type(GFS_init_type),          intent(in)    :: Init_parm
 
 !--- local variables
-    integer :: idt, idx, num, nb, nblks, NFXR, idtend, ichem, itrac, iprocess, i
+    integer :: idt, idx, num, nb, nblks, NFXR, idtend, ichem, itrac, iprocess, i, chunksize
     character(len=2) :: xtra
     real(kind=kind_phys), parameter :: cn_one = 1._kind_phys
     real(kind=kind_phys), parameter :: cn_100 = 100._kind_phys
     real(kind=kind_phys), parameter :: cn_th  = 1000._kind_phys
     real(kind=kind_phys), parameter :: cn_hr  = 3600._kind_phys
     character(len=30) :: namestr, descstr
+    real(kind_phys), allocatable, target :: temp2d(:,:)
 
     NFXR = Model%NFXR
     nblks = Model%nchunks
@@ -5474,22 +5476,19 @@ module GFS_diagnostics
         ExtDiag(idx)%desc = 'ISCCP mean cloud fraction'
         ExtDiag(idx)%unit = 'frac'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
            ExtDiag(idx)%data(nb)%var2 => IntDiag%cldtot_isccp(Model%chunk_begin(nb):Model%chunk_end(nb))
         enddo
+
         ! ISCCP mean cloud albedo
         idx = idx + 1
         ExtDiag(idx)%axes = 2
 	ExtDiag(idx)%name = 'MEANCLDALB_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud albedo'
-        ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
@@ -5502,8 +5501,6 @@ module GFS_diagnostics
         ExtDiag(idx)%desc = 'ISCCP mean cloud top pressure '
         ExtDiag(idx)%unit = 'Pa'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
@@ -5516,8 +5513,6 @@ module GFS_diagnostics
         ExtDiag(idx)%desc = 'ISCCP mean cloud optical depth'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
@@ -5530,8 +5525,6 @@ module GFS_diagnostics
         ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature'
         ExtDiag(idx)%unit = 'K'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
@@ -5544,8 +5537,6 @@ module GFS_diagnostics
         ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature for clear sky conditions'
         ExtDiag(idx)%unit = 'K'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-        ExtDiag(idx)%time_avg = .TRUE.
-        ExtDiag(idx)%time_avg_kind = 'rad_lw'
         ExtDiag(idx)%intpl_method = 'bilinear'
         allocate (ExtDiag(idx)%data(nblks))
         do nb = 1,nblks
@@ -5553,6 +5544,35 @@ module GFS_diagnostics
         enddo
         ! ISCCP cloud optical depth
         ! ISCCP cloud top pressure
+        ! ISCCP CFAD
+        idx = idx + 1
+        ExtDiag(idx)%axes = 3
+        ExtDiag(idx)%name = 'FISCCP1_COSP'
+        ExtDiag(idx)%desc = 'Grid-box fraction covered by each ISCCP D level cloud type'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ! Create reshaped temporary.
+           chunksize = Model%chunk_end(nb) - Model%chunk_begin(nb) + 1
+           allocate (temp2d(chunksize,Model%levs))
+           temp2d(:,1:Model%n_isccp_pres_bins*Model%n_isccp_tau_bins) = &
+                reshape(IntDiag%f1isccp_cosp(Model%chunk_begin(nb):Model%chunk_end(nb),:,:), &
+                       (/chunksize, Model%n_isccp_pres_bins*Model%n_isccp_tau_bins/))
+           ExtDiag(idx)%data(nb)%var3 => temp2d
+           deallocate (temp2d)
+        enddo
+        ! ISCCP CFAD NEW
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'FISCCP1_COSP2'
+        ExtDiag(idx)%desc = 'Grid-box fraction covered by each ISCCP D level cloud type'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        allocate (ExtDiag(idx)%data(nblks))
+        do nb = 1,nblks
+           ExtDiag(idx)%data(nb)%var4 => IntDiag%f1isccp_cosp(Model%chunk_begin(nb):Model%chunk_end(nb),:,:)
+        enddo
      endif
   endif
   
