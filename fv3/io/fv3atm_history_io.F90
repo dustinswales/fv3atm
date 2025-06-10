@@ -80,7 +80,6 @@ module fv3atm_history_io_mod
     procedure :: output => history_type_output
     procedure :: store_data => history_type_store_data
     procedure :: store_data3D => history_type_store_data3D
-    procedure :: store_dataCOSP => history_type_store_dataCOSP
 #ifdef use_WRTCOMP
     procedure :: bundle_setup => history_type_bundle_setup
     procedure :: add_field_to_phybundle => history_type_add_field_to_phybundle
@@ -520,19 +519,6 @@ CONTAINS
 
           call hist%store_data3D(Diag(idx)%id, var3, Time, idx, Diag(idx)%intpl_method, Diag(idx)%name)
           deallocate(var3)
-        elseif (Diag(idx)%axes == 4) then
-           allocate(var4(nx,ny,hist%cosp_ntau_isccp,hist%cosp_nprs_isccp))
-           do j = 1, ny
-              jj = j + Atm_block%jsc -1
-              do i = 1, nx
-                 ii = i + Atm_block%isc -1
-                 nb = Atm_block%blkno(ii,jj)
-                 ix = Atm_block%ixp(ii,jj)
-                 var4(i,j,:,:) = Diag(idx)%data(nb)%var4(ix,:,:)*lcnvfac
-              enddo
-           enddo
-           call hist%store_dataCOSP(Diag(idx)%id, var4, Time, idx, Diag(idx)%intpl_method, Diag(idx)%name)
-           deallocate(var4)
         endif if_2d
       endif has_id
     end do history_loop
@@ -734,42 +720,7 @@ CONTAINS
     endif
     !
   end subroutine history_type_store_data3D
-  
-  subroutine history_type_store_dataCOSP(hist, id, work, Time, idx, intpl_method, fldname)
-    implicit none
-    class(history_type)                 :: hist
-    integer, intent(in)                 :: id
-    integer, intent(in)                 :: idx
-#ifdef CCPP_32BIT
-    real, intent(in)                    :: work(:,:,:,:)
-#else
-    real(kind=kind_phys), intent(in)    :: work(hist%ieco-hist%isco+1,hist%jeco-hist%jsco+1,hist%cosp_ntau_isccp,hist%cosp_nprs_isccp)
-#endif
-    type(time_type), intent(in)         :: Time
-    character(*), intent(in)            :: intpl_method
-    character(*), intent(in)            :: fldname
-    !
-    integer j,i,nv,i1,j1
-    logical used
-    
-    if_has_id: if( id > 0 ) then
-       if_gridcomp: if( hist%use_wrtgridcomp_output ) then
-          if_interp: if( trim(intpl_method) == 'bilinear') then
-             !$omp parallel do default(shared) private(i,j)
-             do j= hist%jsco,hist%jeco
-                do i= hist%isco,hist%ieco
-                   hist%buffer_phys_cosphist(i,j,:,:,hist%nstt(idx)) = work(i-hist%isco+1,j-hist%jsco+1,:,:)
-                enddo
-             enddo
-          end if if_interp
-       else
-          used = send_data(id, work, Time)
-       endif if_gridcomp
-    end if if_has_id
-    
-  end subroutine history_type_store_dataCOSP
-
-    
+      
 #ifdef use_WRTCOMP
   !>@brief Sets up the ESMF bundle to use for quilt diagnostic output
   !> \section history_type%bundle_setup procedure

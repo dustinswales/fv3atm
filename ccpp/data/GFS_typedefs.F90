@@ -953,8 +953,12 @@ module GFS_typedefs
     real(kind_phys)      :: misr_tau_bins(7)        !< Optical-depth bin centers for ..
     integer              :: n_modis_pres_bins       !< Number of pressure      bins in MODIS joint-histogram (CFAD) 
     integer              :: n_modis_tau_bins        !< Number of optical-depth bins in ...
+    integer              :: n_modis_reffi_bins      !< Number of radii (ice)   bins in ...
+    integer              :: n_modis_reffl_bins      !< Number of radii (liq)   bins in ...
     real(kind_phys)      :: modis_pres_bins(7)      !< Pressure bin centers for ...
     real(kind_phys)      :: modis_tau_bins(7)       !< Optical-depth bin centers for ...
+    real(kind_phys)      :: modis_reffi_bins(7)     !< Ice-radius bin centers for ...
+    real(kind_phys)      :: modis_reffl_bins(7)     !< Liquid-radius bin centers for ...
 
 !--- microphysical switch
     logical              :: convert_dry_rho = .true.       !< flag for converting mass/number concentrations from moist to dry
@@ -2234,7 +2238,28 @@ module GFS_typedefs
     real (kind=kind_phys), pointer :: cldptop_isccp(:,:)    => null()
     ! MISR
     real (kind=kind_phys), pointer :: f1misr_cosp(:,:,:)    => null()
-
+    ! MODIS
+    real (kind=kind_phys), pointer :: clt_modis(:)          => null()
+    real (kind=kind_phys), pointer :: clw_modis(:)          => null()
+    real (kind=kind_phys), pointer :: cli_modis(:)          => null()
+    real (kind=kind_phys), pointer :: clh_modis(:)          => null()
+    real (kind=kind_phys), pointer :: clm_modis(:)          => null()
+    real (kind=kind_phys), pointer :: cll_modis(:)          => null()
+    real (kind=kind_phys), pointer :: taut_modis(:)         => null()
+    real (kind=kind_phys), pointer :: tauw_modis(:)         => null()
+    real (kind=kind_phys), pointer :: taui_modis(:)         => null()
+    real (kind=kind_phys), pointer :: tautlog_modis(:)      => null()
+    real (kind=kind_phys), pointer :: tauwlog_modis(:)      => null()
+    real (kind=kind_phys), pointer :: tauilog_modis(:)      => null()
+    real (kind=kind_phys), pointer :: reffclw_modis(:)      => null()
+    real (kind=kind_phys), pointer :: reffcli_modis(:)      => null()
+    real (kind=kind_phys), pointer :: pct_modis(:)          => null()
+    real (kind=kind_phys), pointer :: lwp_modis(:)          => null()
+    real (kind=kind_phys), pointer :: iwp_modis(:)          => null()
+    real (kind=kind_phys), pointer :: cl_modis(:,:,:)       => null()
+    real (kind=kind_phys), pointer :: clri_modis(:,:,:)     => null()
+    real (kind=kind_phys), pointer :: clrl_modis(:,:,:)     => null()
+    
     !--- Lightning threat indices
     real (kind=kind_phys), pointer :: ltg1_max(:)           => null()  !
     real (kind=kind_phys), pointer :: ltg2_max(:)           => null()  !
@@ -3608,6 +3633,9 @@ module GFS_typedefs
     integer              :: n_misr_tau_bins   = 7        !< Number of optical-depth bins in MISR  joint-histogram (CFAD)
     integer              :: n_modis_pres_bins = 7        !< Number of pressure      bins in MODIS joint-histogram (CFAD)
     integer              :: n_modis_tau_bins  = 7        !< Number of optical-depth bins in MODIS joint-histogram (CFAD)
+    integer              :: n_modis_reffi_bins= 7        !< Number of ice-radii     bins in MODIS joint-histogram (CFAD)
+    integer              :: n_modis_reffl_bins= 7        !< Number of liquid-radii  bins in MODIS joint-histogram (CFAD)
+
 !--- Z-C microphysical parameters
     integer              :: imp_physics       =  99                !< choice of cloud scheme
     real(kind=kind_phys) :: psautco(2)        = (/6.0d-4,3.0d-4/)  !< [in] auto conversion coeff from ice to snow
@@ -4804,6 +4832,8 @@ module GFS_typedefs
     Model%n_misr_tau_bins    = n_misr_tau_bins
     Model%n_modis_pres_bins  = n_modis_pres_bins
     Model%n_modis_tau_bins   = n_modis_tau_bins
+    Model%n_modis_reffi_bins = n_modis_reffi_bins
+    Model%n_modis_reffl_bins = n_modis_reffl_bins
 
 !--- microphysical switch
     Model%imp_physics      = imp_physics
@@ -8161,19 +8191,41 @@ module GFS_typedefs
 
     if (Model%do_cosp) then
        if (Model%do_cosp_isccp) then
-          allocate(Diag%f1isccp_cosp(IM,Model%n_isccp_tau_bins, Model%n_isccp_pres_bins), &
-                   Diag%f1isccp_cosp_avg(Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),&
-                   Diag%cldtot_isccp(IM),                                   &
-                   Diag%meancldalb_isccp(IM),                               &
-                   Diag%meanptop_isccp(IM),                                 &
-                   Diag%meantau_isccp(IM),                                  &
-                   Diag%meantb_isccp(IM),                                   &
-                   Diag%meantbclr_isccp(IM),                                &
-                   Diag%tau_isccp(IM,Model%cosp_nsubcol),                   &
-                   Diag%cldptop_isccp(IM,Model%cosp_nsubcol))
+          allocate(Diag%f1isccp_cosp    (IM, Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),   &
+                   Diag%f1isccp_cosp_avg(    Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),   &
+                   Diag%cldtot_isccp    (IM),                                                    &
+                   Diag%meancldalb_isccp(IM),                                                    &
+                   Diag%meanptop_isccp  (IM),                                                    &
+                   Diag%meantau_isccp   (IM),                                                    &
+                   Diag%meantb_isccp    (IM),                                                    &
+                   Diag%meantbclr_isccp (IM),                                                    &
+                   Diag%tau_isccp       (IM, Model%cosp_nsubcol),                                &
+                   Diag%cldptop_isccp   (IM, Model%cosp_nsubcol))
        endif
        if (Model%do_cosp_misr) then
-          allocate(Diag%f1misr_cosp(IM,Model%n_misr_tau_bins, Model%n_misr_hgt_bins))
+          allocate(Diag%f1misr_cosp     (IM, Model%n_misr_tau_bins, Model%n_misr_hgt_bins))
+       endif
+       if (Model%do_cosp_modis) then
+          allocate(Diag%clt_modis       (IM),                                                    &
+                   Diag%clw_modis       (IM),                                                    &
+                   Diag%cli_modis       (IM),                                                    &
+                   Diag%clh_modis       (IM),                                                    &
+                   Diag%clm_modis       (IM),                                                    &
+                   Diag%cll_modis       (IM),                                                    &
+                   Diag%taut_modis      (IM),                                                    &
+                   Diag%tauw_modis      (IM),                                                    &
+                   Diag%taui_modis      (IM),                                                    &
+                   Diag%tautlog_modis   (IM),                                                    &
+                   Diag%tauwlog_modis   (IM),                                                    &
+                   Diag%tauilog_modis   (IM),                                                    &
+                   Diag%reffclw_modis   (IM),                                                    &
+                   Diag%reffcli_modis   (IM),                                                    &
+                   Diag%pct_modis       (IM),                                                    &
+                   Diag%lwp_modis       (IM),                                                    &
+                   Diag%iwp_modis       (IM),                                                    &
+                   Diag%cl_modis        (IM,  Model%n_modis_tau_bins, Model%n_modis_pres_bins),  &
+                   Diag%clri_modis      (IM,  Model%n_modis_tau_bins, Model%n_modis_reffi_bins), &
+                   Diag%clrl_modis      (IM,  Model%n_modis_tau_bins, Model%n_modis_reffl_bins))
        endif
     endif
 
@@ -8218,6 +8270,29 @@ module GFS_typedefs
        ! MISR
        if (Model%do_cosp_misr) then
           Diag%f1misr_cosp      = clear_val
+       endif
+       ! MODIS
+       if (Model%do_cosp_modis) then
+          Diag%clt_modis        = clear_val
+          Diag%clw_modis        = clear_val
+          Diag%cli_modis        = clear_val
+          Diag%clh_modis        = clear_val
+          Diag%clm_modis        = clear_val
+          Diag%cll_modis        = clear_val
+          Diag%taut_modis       = clear_val
+          Diag%tauw_modis       = clear_val
+          Diag%taui_modis       = clear_val
+          Diag%tautlog_modis    = clear_val
+          Diag%tauwlog_modis    = clear_val
+          Diag%tauilog_modis    = clear_val
+          Diag%reffclw_modis    = clear_val
+          Diag%reffcli_modis    = clear_val
+          Diag%pct_modis        = clear_val
+          Diag%lwp_modis        = clear_val
+          Diag%iwp_modis        = clear_val
+          Diag%cl_modis         = clear_val
+          Diag%clri_modis       = clear_val
+          Diag%clrl_modis       = clear_val
        endif
     endif
     

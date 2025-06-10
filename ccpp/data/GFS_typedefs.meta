@@ -4435,6 +4435,32 @@
   units = count
   dimensions = ()
   type = integer
+[n_modis_reffi_bins]
+  standard_name = number_of_modis_simulator_ice_radius_bins
+  long_name = number of ice radii bins in MODIS CFAD
+  units = count
+  dimensions = ()
+  type = integer
+[modis_reffi_bins]
+  standard_name = modis_simulator_ice_radius_bins
+  long_name = ice radii bins used in MODIS CFAD
+  units = m
+  dimensions = (number_of_modis_simulator_ice_radius_bins)
+  type = real
+  kind = kind_phys
+[n_modis_reffl_bins]
+  standard_name = number_of_modis_simulator_liquid_radius_bins
+  long_name = number of liquid radii bins in MODIS CFAD
+  units = count
+  dimensions = ()
+  type = integer
+[modis_reffl_bins]
+  standard_name = modis_simulator_liquid_radius_bins
+  long_name = liquid radii bins used in MODIS CFAD
+  units = m
+  dimensions = (number_of_modis_simulator_ice_radius_bins)
+  type = real
+  kind = kind_phys
 [n_misr_hgt_bins]
   standard_name = number_of_misr_simulator_height_bins
   long_name = number of height bins in MISR CFAD.
@@ -10344,6 +10370,146 @@
   long_name = MISR cloud frequency by altitude diagram
   units = 1
   dimensions = (horizontal_dimension,number_of_misr_simulator_optical_depth_bins,number_of_misr_simulator_height_bins)
+  type = real
+  kind = kind_phys
+[clt_modis]
+  standard_name = modis_total_cloud_fraction
+  long_name = MODIS Total Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[clw_modis]
+  standard_name = modis_liquid_cloud_fraction
+  long_name = MODIS Liquid Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[cli_modis]
+  standard_name = modis_ice_cloud_fraction
+  long_name = MODIS Ice Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[clh_modis]
+  standard_name = modis_high_level_cloud_fraction
+  long_name = MODIS High Level Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[clm_modis]
+  standard_name = modis_mid_level_cloud_fraction
+  long_name = MODIS Mid Level Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[cll_modis]
+  standard_name = modis_low_level_cloud_fraction
+  long_name = MODIS Low Level Cloud Fraction
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[taut_modis]
+  standard_name = modis_total_cloud_optical_depth
+  long_name = MODIS Total Cloud Optical Thickness*clt_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[tauw_modis]
+  standard_name = modis_liquid_cloud_optical_depth
+  long_name = MODIS Liquid Cloud Optical Thickness*clw_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[taui_modis]
+  standard_name = modis_ice_cloud_optical_depth
+  long_name = MODIS Ice Cloud Optical Thickness*cli_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[tautlog_modis]
+  standard_name = modis_total_cloud_optical_depth_log10mean
+  long_name = MODIS Total Cloud Optical Thickness (Log10 Mean)*clt_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[tauwlog_modis]
+  standard_name = modis_liquid_cloud_optical_depth_log10mean
+  long_name = MODIS Liquid Cloud Optical Thickness (Log10 Mean)*clw_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[tauilog_modis]
+  standard_name = modis_ice_cloud_optical_depth_log10mean
+  long_name = MODIS Ice Cloud Optical Thickness (Log10 Mean)*cli_modis
+  units = 1
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[reffclw_modis]
+  standard_name = modis_liquid_cloud_particle_size
+  long_name = MODIS Liquid Cloud Particle Size*clw_modis
+  units = m
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[reffcli_modis]
+  standard_name = modis_ice_cloud_particle_size
+  long_name = MODIS Ice Cloud Particle Size*cli_modis
+  units = m
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[pct_modis]
+  standard_name = modis_cloud_top_pressure
+  long_name = MODIS Cloud Top Pressure*clt_modis
+  units = Pa
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[lwp_modis]
+  standard_name = modis_cloud_liquid_water_path
+  long_name = MODIS Cloud Liquid Water Path*clw_modis
+  units = kg m-2
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[iwp_modis]
+  standard_name = modis_cloud_ice_water_path
+  long_name = MODIS Cloud Ice Water Path*cli_modis
+  units = kg m-2
+  dimensions = (horizontal_dimension)
+  type = real
+  kind = kind_phys
+[cl_modis]
+  standard_name = modis_cloud_frequency_by_altitude_diagram
+  long_name = MODIS cloud frequency by altitude diagram
+  units = 1
+  dimensions = (horizontal_dimension,number_of_modis_simulator_optical_depth_bins,number_of_modis_simulator_pressure_bins)
+  type = real
+  kind = kind_phys
+[clri_modis]
+  standard_name = modis_cloud_frequency_by_ice_size_diagram
+  long_name = MODIS cloud frequency by ice size diagram
+  units = 1
+  dimensions = (horizontal_dimension,number_of_modis_simulator_optical_depth_bins,number_of_modis_simulator_ice_radius_bins)
+  type = real
+  kind = kind_phys
+[clrl_modis]
+  standard_name = modis_cloud_frequency_by_liquid_size_diagram
+  long_name = MODIS cloud frequency by liquid size diagram
+  units = 1
+  dimensions = (horizontal_dimension,number_of_modis_simulator_optical_depth_bins,number_of_modis_simulator_liquid_radius_bins)
   type = real
   kind = kind_phys
 [old_pgr]
