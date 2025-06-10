@@ -162,20 +162,6 @@ module post_fv3
           call read_xml()
         else if(ifhr > 0) then
           filenameflat = 'postxconfig-NT.txt'
-          if(associated(paramset)) then
-            if(size(paramset)>0) then
-              do i=1,size(paramset)
-                if (associated(paramset(i)%param)) then
-                  if (size(paramset(i)%param)>0) then
-                    deallocate(paramset(i)%param)
-                    nullify(paramset(i)%param)
-                  endif
-                endif
-              enddo
-            endif
-            deallocate(paramset)
-            nullify(paramset)
-          endif
           num_pset = 0
           call read_xml()
           read_postcntrl = .false.
@@ -430,7 +416,9 @@ module post_fv3
             if (trim(attName) == 'ncnsto') wrt_int_state%ntrac=varival
             if (trim(attName) == 'ncld')   wrt_int_state%ncld=varival
             if (trim(attName) == 'nsoil')  wrt_int_state%nsoil=varival
+            if (trim(attName) == 'fhzero')  wrt_int_state%fhzero=varival
             if (trim(attName) == 'imp_physics') wrt_int_state%imp_physics=varival
+            if (trim(attName) == 'landsfcmdl') wrt_int_state%landsfcmdl=varival
           endif
         else if (typekind==ESMF_TYPEKIND_R4) then
           if(n==1) then
@@ -554,7 +542,7 @@ module post_fv3
                              no3cb, nh4cb, dusmass, ducmass, dusmass25,ducmass25, &
                              snownc, graupelnc, qrmax, hail_maxhailcast,       &
                              smoke_ave,dust_ave,coarsepm_ave,swddif,swddni,    &
-                             xlaixy
+                             xlaixy,wspd10umax,wspd10vmax
       use soil,        only: sldpth, sh2o, smc, stc, sllevel
       use masks,       only: lmv, lmh, htm, vtm, gdlat, gdlon, dx, dy, hbm2, sm, sice
       use ctlblk_mod,  only: im, jm, lm, lp1, jsta, jend, jsta_2l, jend_2u, jsta_m,jend_m, &
@@ -628,7 +616,7 @@ module post_fv3
 !
       imp_physics = wrt_int_state%imp_physics       !set GFS mp physics to 99 for Zhao scheme
       dtp         = wrt_int_state%dtp
-      iSF_SURFACE_PHYSICS = 2
+      iSF_SURFACE_PHYSICS = wrt_int_state%landsfcmdl
       spval = 9.99e20
 !
 ! nems gfs has zhour defined
@@ -1367,13 +1355,48 @@ module post_fv3
               enddo
             endif
 
-            ! max hourly 10m agl wind speed
-            if(trim(fieldname)=='spd10max') then
+            ! max temporal 10m agl wind speed
+            if (modelname =='GFS')then
+            if(trim(fieldname)=='wind10m_max') then
               !$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,spval,wspd10max,arrayr42d,sm,fillValue)
               do j=jsta,jend
                 do i=ista, iend
                   wspd10max(i,j) = arrayr42d(i,j)
                   if (abs(arrayr42d(i,j)-fillValue) < small) wspd10max(i,j) = spval
+                enddo
+              enddo
+            endif
+            else
+            ! max hourly 10m agl wind speed
+            if(trim(fieldname)=='spd10max') then
+              !$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,spval,wspd10max,arrayr42d,sm,fillValue)
+              do j=jsta,jend 
+                do i=ista, iend
+                  wspd10max(i,j) = arrayr42d(i,j)
+                  if (abs(arrayr42d(i,j)-fillValue) < small) wspd10max(i,j) = spval
+                enddo        
+              enddo          
+            endif  
+            endif !end modelname
+
+            ! u comp of temporal max 10m agl wind speed 
+            if(trim(fieldname)=='u10m_max') then
+              !$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,spval,wspd10umax,arrayr42d,sm,fillValue)
+              do j=jsta,jend
+                do i=ista, iend
+                  wspd10umax(i,j) = arrayr42d(i,j)
+                  if (abs(arrayr42d(i,j)-fillValue) < small) wspd10umax(i,j) = spval
+                enddo
+              enddo
+            endif
+
+            ! v comp of temporal max 10m agl wind speed 
+            if(trim(fieldname)=='v10m_max') then
+              !$omp parallel do default(none) private(i,j) shared(jsta,jend,ista,iend,spval,wspd10vmax,arrayr42d,sm,fillValue)
+              do j=jsta,jend
+                do i=ista, iend
+                  wspd10vmax(i,j) = arrayr42d(i,j)
+                  if (abs(arrayr42d(i,j)-fillValue) < small) wspd10vmax(i,j) = spval
                 enddo
               enddo
             endif
@@ -4495,9 +4518,13 @@ module post_fv3
         do j=jsta,jend
           do i=ista,iend
             if( zint(i,j,l+1)/=spval .and. zint(i,j,l)/=spval .and. pmid(i,j,l) /= spval) then
-              zmid(i,j,l)=zint(i,j,l+1)+(zint(i,j,l)-zint(i,j,l+1))* &
+              if (abs(zint(i,j,l+1)-zint(i,j,l)) < small) then
+                zmid(i,j,l)=zint(i,j,l)
+              else
+                zmid(i,j,l)=zint(i,j,l+1)+(zint(i,j,l)-zint(i,j,l+1))* &
                     (log(pmid(i,j,l))-alpint(i,j,l+1))/ &
                     (alpint(i,j,l)-alpint(i,j,l+1))
+              endif
             else
               zmid(i,j,l) = spval
             endif

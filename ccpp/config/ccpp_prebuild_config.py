@@ -22,9 +22,10 @@ VARIABLE_DEFINITION_FILES = [
     'physics/physics/photochem/module_ozphys.F90',
     'physics/physics/photochem/module_h2ophys.F90',
     'physics/physics/Diagnostics/COSP2/cosp_kinds.F90',
-    'data/CCPP_typedefs.F90',
-    'data/GFS_typedefs.F90',
-    'data/CCPP_data.F90',
+    'physics/physics/SFC_Models/Land/Noahmp/lnd_iau_mod.F90',
+    '../ccpp/data/CCPP_typedefs.F90',
+    '../ccpp/data/GFS_typedefs.F90',
+    '../ccpp/data/CCPP_data.F90',
     ]
 
 TYPEDEFS_NEW_METADATA = {
@@ -49,6 +50,12 @@ TYPEDEFS_NEW_METADATA = {
     'module_h2ophys' : {
         'module_h2ophys' : '',
         'ty_h2ophys'     : '',
+        },
+    'land_iau_mod' : {
+        'land_iau_mod' : '',
+        'land_iau_external_data_type' : '',
+        'land_iau_state_type' : '',
+        'land_iau_control_type' : '',
         },
     'CCPP_typedefs' : {
         'GFS_interstitial_type' : 'GFS_Interstitial(cdata%thrd_no)',
@@ -103,8 +110,6 @@ SCHEME_FILES = [
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_rrtmgp_cloud_overlap.F90',
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_rrtmgp_post.F90',
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_stochastics.F90',
-    'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_suite_interstitial_rad_reset.F90',
-    'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_suite_interstitial_phys_reset.F90',
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_suite_interstitial_1.F90',
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_suite_interstitial_2.F90',
     'physics/physics/Interstitials/UFS_SCM_NEPTUNE/GFS_suite_stateout_reset.F90',
@@ -235,7 +240,7 @@ CAPS_SOURCEFILE = '{build_dir}/physics/CCPP_CAPS.sh'
 CAPS_DIR = '{build_dir}/physics'
 
 # Directory where the suite definition files are stored
-SUITES_DIR = 'suites'
+SUITES_DIR = '../ccpp/suites'
 
 # Directory where to write static API to
 STATIC_API_DIR = '{build_dir}/physics'
