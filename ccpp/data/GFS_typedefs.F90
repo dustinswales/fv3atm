@@ -3633,8 +3633,8 @@ module GFS_typedefs
     integer              :: n_misr_tau_bins   = 7        !< Number of optical-depth bins in MISR  joint-histogram (CFAD)
     integer              :: n_modis_pres_bins = 7        !< Number of pressure      bins in MODIS joint-histogram (CFAD)
     integer              :: n_modis_tau_bins  = 7        !< Number of optical-depth bins in MODIS joint-histogram (CFAD)
-    integer              :: n_modis_reffi_bins= 7        !< Number of ice-radii     bins in MODIS joint-histogram (CFAD)
-    integer              :: n_modis_reffl_bins= 7        !< Number of liquid-radii  bins in MODIS joint-histogram (CFAD)
+    integer              :: n_modis_reffi_bins= 6        !< Number of ice-radii     bins in MODIS joint-histogram (CFAD)
+    integer              :: n_modis_reffl_bins= 6        !< Number of liquid-radii  bins in MODIS joint-histogram (CFAD)
 
 !--- Z-C microphysical parameters
     integer              :: imp_physics       =  99                !< choice of cloud scheme

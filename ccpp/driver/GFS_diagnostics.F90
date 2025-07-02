@@ -4188,10 +4188,6 @@ module GFS_diagnostics
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meantbclr_isccp(:)
 
-        ! ISCCP cloud optical depth
-        ! ISCCP cloud top pressure
-
-
         ! ISCCP CFAD (**NOT YET IMPLEMENTED**)
         !idx = idx + 1
         !ExtDiag(idx)%axes = 3
@@ -4200,10 +4196,18 @@ module GFS_diagnostics
         !ExtDiag(idx)%unit = '%'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
 
-     endif
-  endif
+     endif ! END ISCCP
+
+     ! COSP MODIS diagnostics
+     if (Model%do_cosp_modis) then
+     endif ! END MODIS
+     
+     ! COSP MISR diagnostics
+     if (Model%do_cosp_misr) then
+     endif ! END MISR
+  endif    ! END COSP
   
-  end subroutine GFS_externaldiag_populate
+end subroutine GFS_externaldiag_populate
 
   subroutine clm_lake_externaldiag_populate(ExtDiag, Model, Sfcprop, idx, cn_one)
     implicit none
