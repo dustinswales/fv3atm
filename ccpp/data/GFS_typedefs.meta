@@ -10303,14 +10303,6 @@
   type = real
   kind = kind_phys
   active = (flag_for_cosp_diagnostics .and. flag_for_cosp_isccp_diagnostics)
-[f1isccp_cosp_avg]
-  standard_name = isccp_cloud_frequency_by_altitude_diagram_averaged
-  long_name = ISCCP cloud frequency by altitude diagram averaged
-  units = 1
-  dimensions = (number_of_isccp_simulator_optical_depth_bins,number_of_isccp_simulator_pressure_bins)
-  type = real
-  kind = kind_phys
-  active = (flag_for_cosp_diagnostics .and. flag_for_cosp_isccp_diagnostics)
 [cldtot_isccp]
   standard_name = isccp_mean_cloud_fraction
   long_name = ISCCP mean cloud fraction

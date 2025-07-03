@@ -2227,7 +2227,6 @@ module GFS_typedefs
     ! COSP
     ! ISCCP
     real (kind=kind_phys), pointer :: f1isccp_cosp(:,:,:)   => null()
-    real (kind=kind_phys), pointer :: f1isccp_cosp_avg(:,:) => null()
     real (kind=kind_phys), pointer :: cldtot_isccp(:)       => null()
     real (kind=kind_phys), pointer :: meancldalb_isccp(:)   => null()
     real (kind=kind_phys), pointer :: meanptop_isccp(:)     => null()
@@ -8192,7 +8191,6 @@ module GFS_typedefs
     if (Model%do_cosp) then
        if (Model%do_cosp_isccp) then
           allocate(Diag%f1isccp_cosp    (IM, Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),   &
-                   Diag%f1isccp_cosp_avg(    Model%n_isccp_tau_bins, Model%n_isccp_pres_bins),   &
                    Diag%cldtot_isccp    (IM),                                                    &
                    Diag%meancldalb_isccp(IM),                                                    &
                    Diag%meanptop_isccp  (IM),                                                    &
@@ -8257,7 +8255,6 @@ module GFS_typedefs
        ! ISCCP
        if (Model%do_cosp_isccp) then
           Diag%f1isccp_cosp     = clear_val
-          Diag%f1isccp_cosp_avg = clear_val
           Diag%cldtot_isccp     = clear_val
           Diag%meancldalb_isccp = clear_val
           Diag%meanptop_isccp   = clear_val
