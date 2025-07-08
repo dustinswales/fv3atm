@@ -447,6 +447,18 @@ CONTAINS
                   enddo
                 enddo
               endif
+           elseif (trim(Diag(idx)%mask) == 'cosp_passive') then
+              var2(1:nx,1:ny) = 0._kind_phys
+              do j = 1, ny
+                 jj = j + Atm_block%jsc -1
+                 do i = 1, nx
+                    ii = i + Atm_block%isc -1
+                    nb = Atm_block%blkno(ii,jj)
+                    ix = Atm_block%ixp(ii,jj)
+                    im = Model%chunk_begin(nb)+ix-1
+                    var2(i,j) = Diag(idx)%data%var2(im)
+                 enddo
+              enddo
             elseif (trim(Diag(idx)%mask) == '') then
               do j = 1, ny
                 jj = j + Atm_block%jsc -1

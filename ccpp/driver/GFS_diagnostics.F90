@@ -4134,6 +4134,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'CLDTOT_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud fraction'
         ExtDiag(idx)%unit = 'frac'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%cldtot_isccp(:)
@@ -4144,6 +4145,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'MEANCLDALB_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud albedo'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meancldalb_isccp(:)
@@ -4154,6 +4156,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'MEANPTOP_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud top pressure '
         ExtDiag(idx)%unit = 'Pa'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meanptop_isccp(:)
@@ -4164,6 +4167,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'MEANTAU_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud optical depth'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meantau_isccp(:)
@@ -4174,6 +4178,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'MEANTB_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature'
         ExtDiag(idx)%unit = 'K'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meantb_isccp(:)
@@ -4184,6 +4189,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'MEANTBCLR_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud brightness temperature for clear sky conditions'
         ExtDiag(idx)%unit = 'K'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%meantbclr_isccp(:)
@@ -4194,6 +4200,7 @@ module GFS_diagnostics
         !ExtDiag(idx)%name = 'FISCCP1_COSP'
         !ExtDiag(idx)%desc = 'Grid-box fraction covered by each ISCCP D level cloud type'
         !ExtDiag(idx)%unit = '%'
+        !ExtDiag(idx)%mask = 'cosp_passive'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
 	!ExtDiag(idx)%intpl_method = 'bilinear'
         !ExtDiag(idx)%data%var4 => IntDiag%f1isccp_cosp(:,:,:)
@@ -4208,6 +4215,7 @@ module GFS_diagnostics
         ExtDiag(idx)%name = 'CLTMODIS'
         ExtDiag(idx)%desc = 'MODIS Total Cloud Fraction'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%clt_modis(:)
@@ -4218,6 +4226,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'CLWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Fraction'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%clw_modis(:)
@@ -4228,6 +4237,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'MODIS Ice Cloud Fraction'
         ExtDiag(idx)%desc = 'CLIMODIS'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%cli_modis(:)
@@ -4238,6 +4248,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'CLHMODIS'
         ExtDiag(idx)%desc = 'MODIS High Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%clh_modis(:)
@@ -4248,6 +4259,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'CLMMODIS'
         ExtDiag(idx)%desc = 'MODIS Mid Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%clm_modis(:)
@@ -4258,6 +4270,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'CLLMODIS'
         ExtDiag(idx)%desc = 'MODIS Low Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%cll_modis(:)
@@ -4268,6 +4281,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUTMODIS'
         ExtDiag(idx)%desc = 'MODIS Total Cloud Optical Thickness*CLTMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%taut_modis(:)
@@ -4278,6 +4292,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Optical Thickness*CLWMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%tauw_modis(:)
@@ -4288,6 +4303,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUIMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Optical Thickness*CLIMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%taui_modis(:)
@@ -4298,6 +4314,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUTLOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Total Cloud Optical Thickness (Log10 Mean)*CLTMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%tautlog_modis(:)
@@ -4308,6 +4325,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUWLOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Optical Thickness (Log10 Mean)*CLWMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%tauwlog_modis(:)
@@ -4318,6 +4336,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'TAUILOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Optical Thickness (Log10 Mean)*CLIMODIS'
         ExtDiag(idx)%unit = '1'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%tauilog_modis(:)
@@ -4328,6 +4347,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'REFFCLWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Particle Size*CLWMODIS'
         ExtDiag(idx)%unit = 'm'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%reffclw_modis(:)
@@ -4338,6 +4358,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'REFFCLIMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Particle Size*CLIMODIS'
         ExtDiag(idx)%unit = 'm'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%reffcli_modis(:)
@@ -4348,6 +4369,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'PCTMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Top Pressure*CLTMODIS'
         ExtDiag(idx)%unit = 'Pa'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%pct_modis(:)
@@ -4358,6 +4380,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'LWPMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Liquid Water Path*CLWMODIS'
         ExtDiag(idx)%unit = 'kg m-2'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%lwp_modis(:)
@@ -4368,6 +4391,7 @@ module GFS_diagnostics
 	ExtDiag(idx)%name = 'IWPMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Ice Water Path*CLIMODIS'
         ExtDiag(idx)%unit = 'kg m-2'
+        ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
         ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var2 => IntDiag%iwp_modis(:)
@@ -4378,6 +4402,7 @@ module GFS_diagnostics
         !ExtDiag(idx)%name = 'CLMODIS'
         !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-pressure histogram)'
         !ExtDiag(idx)%unit = '%'
+        !ExtDiag(idx)%mask = 'cosp_passive'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
         !ExtDiag(idx)%intpl_method = 'bilinear'
         !ExtDiag(idx)%data%var4 => IntDiag%cl_modis(:,:,:)
@@ -4388,6 +4413,7 @@ module GFS_diagnostics
         !ExtDiag(idx)%name = 'CLRIMODIS'
         !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffice histogram)'
         !ExtDiag(idx)%unit = '%'
+        !ExtDiag(idx)%mask = 'cosp_passive'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
         !ExtDiag(idx)%intpl_method = 'bilinear'
         !ExtDiag(idx)%data%var4 => IntDiag%clri_modis(:,:,:)
@@ -4398,6 +4424,7 @@ module GFS_diagnostics
         !ExtDiag(idx)%name = 'CLRLMODIS'
         !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffliq histogram)'
         !ExtDiag(idx)%unit = '%'
+        !ExtDiag(idx)%mask = 'cosp_passive'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
         !ExtDiag(idx)%intpl_method = 'bilinear'
         !ExtDiag(idx)%data%var4 => IntDiag%clrl_modis(:,:,:)
@@ -4411,10 +4438,10 @@ module GFS_diagnostics
         !ExtDiag(idx)%name = 'CLD_MISR'
         !ExtDiag(idx)%desc = 'Cloud Fraction from MISR Simulator'
         !ExtDiag(idx)%unit = '%'
+        !ExtDiag(idx)%mask = 'cosp_passive'
         !ExtDiag(idx)%mod_name = 'gfs_phys'
         !ExtDiag(idx)%intpl_method = 'bilinear'
         !ExtDiag(idx)%data%var4 => IntDiag%f1misr_cosp(:,:,:)
-
      endif ! END MISR
      
   endif    ! END COSP
