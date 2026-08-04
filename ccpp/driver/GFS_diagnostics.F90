@@ -4285,15 +4285,15 @@ module GFS_diagnostics
         ExtDiag(idx)%data%var2 => IntDiag%meantbclr_isccp(:)
 
         ! Grid-box fraction covered by each ISCCP D level cloud type  (**NOT YET IMPLEMENTED**)
-        !idx = idx + 1
-        !ExtDiag(idx)%axes = 4
-        !ExtDiag(idx)%name = 'FISCCP1_COSP'
-        !ExtDiag(idx)%desc = 'Grid-box fraction covered by each ISCCP D level cloud type'
-        !ExtDiag(idx)%unit = '%'
-        !ExtDiag(idx)%mask = 'cosp_passive'
-        !ExtDiag(idx)%mod_name = 'gfs_phys'
-	!ExtDiag(idx)%intpl_method = 'bilinear'
-        !ExtDiag(idx)%data%var4 => IntDiag%f1isccp_cosp(:,:,:)
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'FISCCP1_COSP'
+        ExtDiag(idx)%desc = 'Grid-box fraction covered by each ISCCP D level cloud type'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+	ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%data%var4 => IntDiag%f1isccp_cosp(:,:,:)
 
      endif ! END ISCCP
 
@@ -4487,51 +4487,51 @@ module GFS_diagnostics
         ExtDiag(idx)%data%var2 => IntDiag%iwp_modis(:)
 
         ! MODIS Cloud Area Fraction (tau-pressure histogram)  (**NOT YET IMPLEMENTED**)
-        !idx = idx + 1
-        !ExtDiag(idx)%axes = 4
-        !ExtDiag(idx)%name = 'CLMODIS'
-        !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-pressure histogram)'
-        !ExtDiag(idx)%unit = '%'
-        !ExtDiag(idx)%mask = 'cosp_passive'
-        !ExtDiag(idx)%mod_name = 'gfs_phys'
-        !ExtDiag(idx)%intpl_method = 'bilinear'
-        !ExtDiag(idx)%data%var4 => IntDiag%cl_modis(:,:,:)
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'CLMODIS'
+        ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-pressure histogram)'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%data%var4 => IntDiag%cl_modis(:,:,:)
         
         ! MODIS Cloud Area Fraction (tau-reffice histogram)  (**NOT YET IMPLEMENTED**)
-        !idx = idx + 1
-        !ExtDiag(idx)%axes = 4
-        !ExtDiag(idx)%name = 'CLRIMODIS'
-        !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffice histogram)'
-        !ExtDiag(idx)%unit = '%'
-        !ExtDiag(idx)%mask = 'cosp_passive'
-        !ExtDiag(idx)%mod_name = 'gfs_phys'
-        !ExtDiag(idx)%intpl_method = 'bilinear'
-        !ExtDiag(idx)%data%var4 => IntDiag%clri_modis(:,:,:)
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'CLRIMODIS'
+        ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffice histogram)'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%data%var4 => IntDiag%clri_modis(:,:,:)
         
         ! MODIS Cloud Area Fraction (tau-reffliq histogram) (**NOT YET IMPLEMENTED**)
-        !idx = idx + 1
-        !ExtDiag(idx)%axes = 4
-        !ExtDiag(idx)%name = 'CLRLMODIS'
-        !ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffliq histogram)'
-        !ExtDiag(idx)%unit = '%'
-        !ExtDiag(idx)%mask = 'cosp_passive'
-        !ExtDiag(idx)%mod_name = 'gfs_phys'
-        !ExtDiag(idx)%intpl_method = 'bilinear'
-        !ExtDiag(idx)%data%var4 => IntDiag%clrl_modis(:,:,:)
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'CLRLMODIS'
+        ExtDiag(idx)%desc = 'MODIS Cloud Area Fraction (tau-reffliq histogram)'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%data%var4 => IntDiag%clrl_modis(:,:,:)
      endif ! END MODIS
      
      ! COSP MISR diagnostics
      if (Model%do_cosp_misr) then
         ! MISR CFAD tau-height (**NOT YET IMPLEMENTED**)
-        !idx = idx + 1
-        !ExtDiag(idx)%axes = 4
-        !ExtDiag(idx)%name = 'CLD_MISR'
-        !ExtDiag(idx)%desc = 'Cloud Fraction from MISR Simulator'
-        !ExtDiag(idx)%unit = '%'
-        !ExtDiag(idx)%mask = 'cosp_passive'
-        !ExtDiag(idx)%mod_name = 'gfs_phys'
-        !ExtDiag(idx)%intpl_method = 'bilinear'
-        !ExtDiag(idx)%data%var4 => IntDiag%f1misr_cosp(:,:,:)
+        idx = idx + 1
+        ExtDiag(idx)%axes = 4
+        ExtDiag(idx)%name = 'CLD_MISR'
+        ExtDiag(idx)%desc = 'Cloud Fraction from MISR Simulator'
+        ExtDiag(idx)%unit = '%'
+        ExtDiag(idx)%mask = 'cosp_passive'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%data%var4 => IntDiag%f1misr_cosp(:,:,:)
      endif ! END MISR
      
   endif    ! END COSP

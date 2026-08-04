@@ -290,9 +290,23 @@ CONTAINS
             endif
           endif
           hist%num_axes_phys = 3
-        endif
-      endif
-
+        else if (diag(idx)%axes == 4) then
+           hist%levo(idx) = 49
+           if( index(trim(diag(idx)%intpl_method),'bilinear') > 0 ) then
+              hist%nstt(idx) = nrgst_bl + 1
+              nrgst_bl  = nrgst_bl + hist%levo(idx)
+           else if (trim(diag(idx)%intpl_method) == 'nearest_stod' ) then
+              hist%nstt(idx) = nrgst_nb + 1
+              nrgst_nb  = nrgst_nb + hist%levo(idx)
+           endif
+           if(trim(diag(idx)%intpl_method) == 'vector_bilinear') then
+              if(diag(idx)%name(1:1) == 'v' .or. diag(idx)%name(1:1) == 'V') then
+                 hist%nstt_vctbl(idx) = nrgst_vctbl + 1
+                 nrgst_vctbl = nrgst_vctbl + hist%levo(idx)
+              endif
+           endif
+        endif !axes
+     endif
     enddo
 
     allocate(hist%buffer_phys_bl(hist%isco:hist%ieco,hist%jsco:hist%jeco,nrgst_bl))
@@ -534,6 +548,31 @@ CONTAINS
           call hist%store_data3D(Diag(idx)%id, var3, Time, idx, Diag(idx)%intpl_method, Diag(idx)%name)
           deallocate(var3)
 
+        elseif (Diag(idx)%axes == 4) then
+           if (trim(Diag(idx)%mask) == 'cosp_passive') then
+              print*,'SWALES writing cosp 3d'
+              levo_3d = hist%levo(idx)
+              allocate(var3(nx,ny,levo_3d))
+
+              do k=1, levo_3d
+                 do j = 1, ny
+                    jj = j + Atm_block%jsc -1
+                    do i = 1, nx
+                       ii = i + Atm_block%isc -1
+                       nb = Atm_block%blkno(ii,jj)
+                       ix = Atm_block%ixp(ii,jj)
+                       im = Model%chunk_begin(nb)+ix-1
+                       ! flip only 3d variables with vertical dimension == levs (atm model levels)
+                       if (levo_3d == levs) then
+                          var3(i,j,k) = Diag(idx)%data%var3(im,levo_3d-k+1)*lcnvfac
+                       else
+                          var3(i,j,k) = Diag(idx)%data%var3(im,        k  )*lcnvfac
+                       endif
+                    enddo
+                 enddo
+              enddo
+              !
+           endif
         endif if_2d
       endif has_id
     end do history_loop
