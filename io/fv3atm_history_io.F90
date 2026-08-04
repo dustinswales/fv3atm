@@ -291,6 +291,7 @@ CONTAINS
           endif
           hist%num_axes_phys = 3
         endif
+
      endif
     enddo
 
