@@ -1,0 +1,1506 @@
+!> @file
+!> @brief Restart reading and writing code, for quilt and non-quilt of
+!> the Sfcprop and physics data.
+!> @author Samuel Trahan @date Jun 20, 2023
+module fv3atm_restart_io_mod
+
+  use block_control_mod,  only: block_control_type
+  use mpp_mod,            only: mpp_error, mpp_chksum, NOTE,   FATAL
+  use GFS_typedefs,       only: GFS_statein_type, GFS_stateout_type
+  use GFS_typedefs,       only: GFS_sfcprop_type, GFS_control_type, kind_phys
+  use GFS_typedefs,       only: GFS_grid_type, GFS_cldprop_type, GFS_tbd_type
+  use GFS_typedefs,       only: GFS_radtend_type, GFS_coupling_type
+  use GFS_restart,        only: GFS_restart_type
+  use fms_mod,            only: stdout
+  use fms2_io_mod,        only: FmsNetcdfDomainFile_t, unlimited,      &
+                                open_file, close_file,                 &
+                                register_axis, register_restart_field, &
+                                register_variable_attribute, register_field, &
+                                read_restart, write_restart, write_data,     &
+                                get_global_io_domain_indices, get_dimension_size, &
+                                global_att_exists, get_global_attribute
+#ifdef ENABLE_PARALLELRESTART
+  use mpp_domains_mod,    only: domain2d, mpp_get_domain_tile_commid, mpp_copy_domain, &
+                                  mpp_define_io_domain, mpp_get_layout
+#else
+  use mpp_domains_mod,    only: domain2d, mpp_copy_domain, &
+                                  mpp_define_io_domain, mpp_get_layout
+#endif
+  use fv3atm_common_io,   only: create_2d_field_and_add_to_bundle, &
+       create_3d_field_and_add_to_bundle, copy_from_gfs_data, axis_type
+  use fv3atm_sfc_io
+  use fv3atm_rrfs_sd_io
+  use fv3atm_clm_lake_io
+  use fv3atm_oro_io
+
+  implicit none
+  private
+
+  public fv3atm_checksum
+  public fv3atm_restart_read
+  public fv3atm_restart_write
+  public fv3atm_restart_register
+  public fv_phy_restart_output
+  public fv_phy_restart_bundle_setup
+  public fv_sfc_restart_output
+  public fv_sfc_restart_bundle_setup
+
+  !> Internal storage for reading and writing physics restart files.
+  type phy_data_type
+    real(kind=kind_phys), pointer, dimension(:,:,:)   :: var2 => null()
+    real(kind=kind_phys), pointer, dimension(:,:,:,:) :: var3 => null()
+    character(len=32),dimension(:),pointer :: var2_names => null()
+    character(len=32),dimension(:),pointer :: var3_names => null()
+    integer :: nvar2d = 0, nvar3d = 0, npz = 0
+  contains
+    procedure :: alloc => phy_data_alloc
+    procedure :: transfer_data => phy_data_transfer_data
+    final phy_data_final
+  end type phy_data_type
+
+  !--- GFDL filenames
+
+  !>@ Filename template for orography data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_oro    = 'oro_data.nc'
+
+  !>@ Filename template for gravity wave drag large-scale orography data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_oro_ls = 'oro_data_ls.nc'
+
+  !>@ Filename template for gravity wave drag small-scale orography data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_oro_ss = 'oro_data_ss.nc'
+
+  !>@ Filename template for surface data that doesn't fall under other categories. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_srf    = 'sfc_data.nc'
+
+  !>@ Filename template for physics diagnostic data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_phy    = 'phy_data.nc'
+
+  !>@ Filename template for monthly dust data for RRFS_SD. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_dust12m= 'dust12m_data.nc'
+
+  !>@ Filename template for RRFS-SD emissions data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_emi    = 'emi_data.nc'
+
+  !>@ Filename template for RRFS-SD smoke data. FMS may add grid and tile information to the name
+  character(len=32), parameter  :: fn_rrfssd = 'SMOKE_RRFS_data.nc'
+
+  real(kind_phys), parameter:: zero = 0.0, one = 1.0
+
+  !> Instance of phy_data_type for quilt output of physics diagnostic data
+  type(phy_data_type) :: phy_quilt
+
+  !> Instance of clm_lake_data_type for quilt output of CLM Lake model restart data
+  type(clm_lake_data_type) :: clm_lake_quilt
+
+  !> Instance of Sfc_io_data_type for quilt output of surface restart data
+  type(Sfc_io_data_type) :: sfc_quilt
+
+  !> Instance of rrfs_sd_state_type for quilt output of RRFS-SD scheme restart data
+  type(rrfs_sd_state_type) :: rrfs_sd_quilt
+
+contains
+
+  !> @brief Reads physics and surface fields.
+  !> @details Calls sfc_prop_restart_read and phys_restart_read to read all surface and physics restart files.
+  !>
+  !> @param[inout] GFS_Sfcprop Surface properties that may be read in and/or updated by climatology or observations .
+  !> @param[inout] GFS_Restart Derived type containing physics restart data.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] warm_start Is warm start run?
+  !> @param[in] ignore_rst_cksum Ignore checksums in restart files?
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv3atm_restart_read (GFS_Sfcprop, GFS_Restart, Atm_block, Model, fv_domain, warm_start, ignore_rst_cksum)
+    implicit none
+    type(GFS_sfcprop_type),   intent(inout) :: GFS_Sfcprop
+    type(GFS_restart_type),   intent(inout) :: GFS_Restart(:)
+    type(block_control_type), intent(in)    :: Atm_block
+    type(GFS_control_type),   intent(inout) :: Model
+    type(domain2d),           intent(in)    :: fv_domain
+    logical,                  intent(in)    :: warm_start
+    logical,                  intent(in)    :: ignore_rst_cksum
+
+    !--- read in surface data from chgres
+    call sfc_prop_restart_read (GFS_Sfcprop, Atm_block, Model, fv_domain, warm_start, ignore_rst_cksum)
+
+    !--- read in physics restart data
+    call phys_restart_read (GFS_Restart, Atm_block, Model, fv_domain, ignore_rst_cksum)
+
+  end subroutine fv3atm_restart_read
+
+  !> @brief Writes surface and physics restart fields without using the write component (quilt).
+  !> @details Calls sfc_prop_restart_write and phys_restart_write to write
+  !>  surface and physics restart fields. This pauses the model to
+  !>  write; it does not use the write component (quilt).
+  !>
+  !> @param[inout] GFS_Sfcprop Surface properties that may be read in and/or updated by climatology or observations .
+  !> @param[inout] GFS_Restart Derived type containing physics restart data.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] timestamp Timestamp to append to intermediate restart files.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv3atm_restart_write (GFS_Sfcprop, GFS_Restart, Atm_block, Model, fv_domain, timestamp)
+    implicit none
+    type(GFS_sfcprop_type),      intent(inout) :: GFS_Sfcprop
+    type(GFS_restart_type),      intent(inout) :: GFS_Restart(:)
+    type(block_control_type),    intent(in)    :: Atm_block
+    type(GFS_control_type),      intent(in)    :: Model
+    type(domain2d),              intent(in)    :: fv_domain
+    character(len=32), optional, intent(in)    :: timestamp
+
+    !--- write surface data from chgres
+    call sfc_prop_restart_write (GFS_Sfcprop, Atm_block, Model, fv_domain, timestamp)
+
+    !--- write physics restart data
+    call phys_restart_write (GFS_Restart, Atm_block, Model, fv_domain, timestamp)
+
+  end subroutine fv3atm_restart_write
+
+  !> @brief fv3atm_checksum
+  !> 
+  !> @param[in] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] GFS_Statein  Prognostic state data provided to ccpp from dycore.
+  !> @param[in] GFS_Stateout Prognostic state data returned to dycore from ccpp.
+  !> @param[in] GFS_Grid Internal grid data needed for interpolations and length-scale calculations.
+  !> @param[in] GFS_Tbd Data not yet assigned to a defined container.
+  !> @param[in] GFS_Cldprop Cloud properties and tendencies needed by radiation from physics.
+  !> @param[in] GFS_Sfcprop Surface properties that may be read in and/or updated by climatology or observations.
+  !> @param[in] GFS_Radtend Radiation tendencies needed in physics
+  !> @param[in] GFS_Coupling Fields to/from other coupled components (e.g. land/ice/ocean/etc.).
+  !> @param[in] Atm_block Physics block layout information.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv3atm_checksum (Model, GFS_Statein, GFS_Stateout, GFS_Grid, GFS_Tbd, GFS_Cldprop, GFS_Sfcprop, GFS_Radtend, GFS_Coupling, Atm_block)
+    implicit none
+    !--- interface variables
+    type(GFS_control_type),    intent(in) :: Model
+    type(GFS_statein_type),    intent(in) :: GFS_Statein
+    type(GFS_stateout_type),   intent(in) :: GFS_Stateout
+    type(GFS_grid_type),       intent(in) :: GFS_Grid
+    type(GFS_tbd_type),        intent(in) :: GFS_Tbd
+    type(GFS_cldprop_type),    intent(in) :: GFS_Cldprop
+    type(GFS_sfcprop_type),    intent(in) :: GFS_Sfcprop
+    type(GFS_radtend_type),    intent(in) :: GFS_Radtend
+    type(GFS_coupling_type),   intent(in) :: GFS_Coupling
+    type (block_control_type), intent(in) :: Atm_block
+    !--- local variables
+    integer :: outunit, i, ix, im, nb, isc, iec, jsc, jec, lev, ntr, k
+    integer :: nsfcprop2d, nt
+    real(kind=kind_phys), allocatable :: temp2d(:,:,:)
+    real(kind=kind_phys), allocatable :: temp3d(:,:,:,:)
+    real(kind=kind_phys), allocatable :: temp3dlevsp1(:,:,:,:)
+    integer, allocatable :: ii1(:), jj1(:)
+    character(len=32) :: name
+
+    isc = Model%isc
+    iec = Model%isc+Model%nx-1
+    jsc = Model%jsc
+    jec = Model%jsc+Model%ny-1
+    lev = Model%levs
+
+    ntr = size(GFS_Statein%qgrs,3)
+
+    nsfcprop2d = 94
+    if (Model%lsm == Model%lsm_noahmp) then
+      nsfcprop2d = nsfcprop2d + 49
+      if (Model%use_cice_alb) then
+        nsfcprop2d = nsfcprop2d + 4
+      endif
+    elseif (Model%lsm == Model%lsm_ruc) then
+      nsfcprop2d = nsfcprop2d + 4 + 12
+      if (Model%rdlai) then
+        nsfcprop2d = nsfcprop2d + 1
+      endif
+    else
+      if (Model%use_cice_alb) then
+        nsfcprop2d = nsfcprop2d + 4
+      endif
+    endif
+
+    if (Model%nstf_name(1) > 0) then
+      nsfcprop2d = nsfcprop2d + 16
+    endif
+
+    if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_flake) then
+      nsfcprop2d = nsfcprop2d + 10
+    endif
+
+    allocate (temp2d(isc:iec,jsc:jec,nsfcprop2d+Model%ntot2d+Model%nctp))
+    allocate (temp3d(isc:iec,jsc:jec,1:lev,14+Model%ntot3d+2*ntr))
+    allocate (temp3dlevsp1(isc:iec,jsc:jec,1:lev+1,3))
+
+    temp2d = zero
+    temp3d = zero
+    temp3dlevsp1 = zero
+
+    !$omp parallel do default(shared) private(i, k, nb, ix, nt, ii1, jj1)
+    block_loop: do nb = 1, Atm_block%nblks
+      allocate(ii1(Atm_block%blksz(nb)))
+      allocate(jj1(Atm_block%blksz(nb)))
+      ii1=Atm_block%index(nb)%ii - isc + 1
+      jj1=Atm_block%index(nb)%jj - jsc + 1
+
+      ! Copy into temp2d
+      nt=0
+
+      ! DH* clean this up - create a new/replacement copy_from_GFS_data - this can be outside the block
+      ! loop, too!
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Statein%pgr        , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%slmsk      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tsfc       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tisfc      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snowd      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%zorl       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%fice       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%hprime(:,1), (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sncovr     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snoalb     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%alvsf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%alnsf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%alvwf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%alnwf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%facsf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%facwf      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%slope      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%shdmin     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%shdmax     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tg3        , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%vfrac      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%vtype      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%stype      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%scolor     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%uustar     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%oro        , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%oro_uf     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%hice       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%weasd      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%canopy     , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%ffmm       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%ffhh       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%f10m       , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tprcp      , (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%srflag     , (/iec-isc+1, jec-jsc+1/))
+      lsm_choice: if (Model%lsm == Model%lsm_noah .or. Model%lsm == Model%lsm_noahmp) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%slc, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%smc, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%stc, (/iec-isc+1, jec-jsc+1/))
+      elseif (Model%lsm == Model%lsm_ruc) then
+        do k=1,3
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sh2o(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+      ! *DH
+        ! Combine levels 4 to lsoil_lsm (9 for RUC) into one
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(sum(GFS_Sfcprop%sh2o(:,4:Model%lsoil_lsm), dim=1), (/iec-isc+1, jec-jsc+1/))
+        !nt=nt+1
+        !do ix=1,Atm_block%blksz(nb)
+        !  temp2d(ii1(ix),jj1(ix),nt) = sum(GFS_Data(nb)%Sfcprop%sh2o(ix,4:Model%lsoil_lsm))
+        !enddo
+     ! DH*
+        do k=1,3
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%smois(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+      ! *DH
+        ! Combine levels 4 to lsoil_lsm (9 for RUC) into one
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(sum(GFS_Sfcprop%smois(:,4:Model%lsoil_lsm), dim=1), (/iec-isc+1, jec-jsc+1/))
+        !nt=nt+1
+        !do ix=1,Atm_block%blksz(nb)
+        !  temp2d(ii1(ix),jj1(ix),nt) = sum(GFS_Data(nb)%Sfcprop%smois(ix,4:Model%lsoil_lsm))
+        !enddo
+     ! DH*
+        do k=1,3
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tslb(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+      ! *DH
+        ! Combine levels 4 to lsoil_lsm (9 for RUC) into one
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(sum(GFS_Sfcprop%tslb(:,4:Model%lsoil_lsm), dim=1), (/iec-isc+1, jec-jsc+1/))
+        !nt=nt+1
+        !do ix=1,Atm_block%blksz(nb)
+        !  temp2d(ii1(ix),jj1(ix),nt) = sum(GFS_Data(nb)%Sfcprop%tslb(ix,4:Model%lsoil_lsm))
+        !enddo
+      endif lsm_choice
+
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t2m, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%q2m, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%nirbmdi, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%nirdfdi, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%visbmdi, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%visdfdi, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%nirbmui, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%nirdfui, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%visbmui, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%visdfui, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%sfcdsw, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%sfcnsw, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Coupling%sfcdlw, (/iec-isc+1, jec-jsc+1/))
+      ! DH* clean this up - create a new/replacement copy_from_GFS_data
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%xlon,   (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%xlat,   (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%xlat_d, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%sinlat, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%coslat, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%area,   (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%dx,     (/iec-isc+1, jec-jsc+1/))
+      if (Model%ntoz > 0) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%ddy_o3, (/iec-isc+1, jec-jsc+1/))
+      endif
+      if (Model%h2o_phys) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Grid%ddy_h, (/iec-isc+1, jec-jsc+1/))
+      endif
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Cldprop%cv, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Cldprop%cvt, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Cldprop%cvb, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Radtend%sfalb, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Radtend%coszen, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Radtend%tsflw, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Radtend%semis, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Radtend%coszdg, (/iec-isc+1, jec-jsc+1/))
+
+      ! Radtend%sfcfsw is an array of derived type, so we copy all
+      ! eight elements of the type in one loop
+      do ix=1,Atm_block%blksz(nb)
+        im = Model%chunk_begin(nb)+ix-1
+        temp2d(ii1(ix),jj1(ix),nt+1) = GFS_Radtend%sfcfsw(im)%upfxc
+        temp2d(ii1(ix),jj1(ix),nt+2) = GFS_Radtend%sfcfsw(im)%upfx0
+        temp2d(ii1(ix),jj1(ix),nt+3) = GFS_Radtend%sfcfsw(im)%dnfxc
+        temp2d(ii1(ix),jj1(ix),nt+4) = GFS_Radtend%sfcfsw(im)%dnfx0
+        temp2d(ii1(ix),jj1(ix),nt+5) = GFS_Radtend%sfcflw(im)%upfxc
+        temp2d(ii1(ix),jj1(ix),nt+6) = GFS_Radtend%sfcflw(im)%upfx0
+        temp2d(ii1(ix),jj1(ix),nt+7) = GFS_Radtend%sfcflw(im)%dnfxc
+        temp2d(ii1(ix),jj1(ix),nt+8) = GFS_Radtend%sfcflw(im)%dnfx0
+      enddo
+      nt = nt + 8
+
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tiice(:,1),    (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tiice(:,2),    (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdirvis_lnd, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdirnir_lnd, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdifvis_lnd, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdifnir_lnd, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%emis_lnd,      (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%emis_ice,      (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sncovr_ice,    (/iec-isc+1, jec-jsc+1/))
+
+      if (Model%use_cice_alb .or. Model%lsm == Model%lsm_ruc) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdirvis_ice, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdirnir_ice, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdifvis_ice, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%albdifnir_ice, (/iec-isc+1, jec-jsc+1/))
+      endif
+
+      lsm_choice_2: if (Model%lsm == Model%lsm_noahmp) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snowxy,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tvxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tgxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%canicexy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%canliqxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%eahxy,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tahxy,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%cmxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%chxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%fwetxy,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sneqvoxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%alboldxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%qsnowxy,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%wslakexy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%zwtxy,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%waxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%wtxy,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%lfmassxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%rtmassxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%stmassxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%woodxy,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%stblcpxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%fastcpxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xsaixy,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xlaixy,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%taussxy,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%smcwtdxy,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%deeprechxy, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%rechxy,     (/iec-isc+1, jec-jsc+1/))
+
+        ! These five arrays use bizarre indexing, so we use loops:
+        do k=-2,0
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snicexy(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+
+        do k=-2,0
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snliqxy(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+
+        do k=-2,0
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tsnoxy(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+
+        do k=1,4
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%smoiseq(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+
+        do k=-2,4
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%zsnsoxy(:,k), (/iec-isc+1, jec-jsc+1/))
+        enddo
+      elseif (Model%lsm == Model%lsm_ruc) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%wetness,         (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%clw_surf_land,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%clw_surf_ice,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%qwv_surf_land,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%qwv_surf_ice,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tsnow_land,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tsnow_ice,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snowfallac_land, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%snowfallac_ice,  (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sfalb_lnd,       (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sfalb_lnd_bck,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%sfalb_ice,       (/iec-isc+1, jec-jsc+1/))
+        if (Model%rdlai) then
+          nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xlaixy, (/iec-isc+1, jec-jsc+1/))
+        endif
+      endif lsm_choice_2
+
+      nstf_name_choice: if (Model%nstf_name(1) > 0) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%tref,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%z_c,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%c_0,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%c_d,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%w_0,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%w_d,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xt,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xs,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xu,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xz,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%zm,      (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xtts,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%xzts,    (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%ifd,     (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%dt_cool, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%qrain,   (/iec-isc+1, jec-jsc+1/))
+      endif nstf_name_choice
+
+      ! Flake
+      if (Model%lkm > 0 .and. Model%iopt_lake==Model%iopt_lake_flake) then
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%T_snow, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%T_ice,  (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%h_ML,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t_ML,   (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t_mnw,  (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%h_talb, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t_talb, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t_bot1, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%t_bot2, (/iec-isc+1, jec-jsc+1/))
+        nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Sfcprop%c_t,    (/iec-isc+1, jec-jsc+1/))
+      endif
+
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Tbd%phy_f2d, (/iec-isc+1, jec-jsc+1/))
+      nt=nt+1; temp2d(isc:iec,jsc:jec,nt) = reshape(GFS_Tbd%phy_fctd, (/iec-isc+1, jec-jsc+1/))
+      ! *DH
+
+      ! Copy to temp3dlevsp1
+      nt=0
+
+      ! DH*
+      nt=nt+1; temp3dlevsp1(isc:iec,jsc:jec,1:lev+1,nt) = reshape(GFS_Statein%phii, (/iec-isc+1, jec-jsc+1, lev+1/))
+      nt=nt+1; temp3dlevsp1(isc:iec,jsc:jec,1:lev+1,nt) = reshape(GFS_Statein%prsi, (/iec-isc+1, jec-jsc+1, lev+1/))
+      nt=nt+1; temp3dlevsp1(isc:iec,jsc:jec,1:lev+1,nt) = reshape(GFS_Statein%prsik, (/iec-isc+1, jec-jsc+1, lev+1/))
+      ! *DH
+
+      ! Copy to temp3d
+      nt=0
+
+      ! DH*
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%phil, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%prsl, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%prslk, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%ugrs, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%vgrs, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%vvl, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%tgrs, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Stateout%gu0, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Stateout%gv0, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Stateout%gt0, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Radtend%htrsw, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Radtend%htrlw, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Radtend%swhc, (/iec-isc+1, jec-jsc+1, lev/))
+      nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Radtend%lwhc, (/iec-isc+1, jec-jsc+1, lev/))
+      do k = 1,Model%ntot3d
+        nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Tbd%phy_f3d(:,:,k), (/iec-isc+1, jec-jsc+1, lev/))
+      enddo
+      do k = 1,ntr
+        nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Statein%qgrs(:,:,k), (/iec-isc+1, jec-jsc+1, lev/))
+        nt=nt+1; temp3d(isc:iec,jsc:jec,1:lev,nt) = reshape(GFS_Stateout%gq0(:,:,k), (/iec-isc+1, jec-jsc+1, lev/))
+      enddo
+      ! *DH
+    enddo block_loop
+
+
+    outunit = stdout()
+    do i = 1,nsfcprop2d+Model%ntot2d+Model%nctp
+      write (name, '(i3.3,3x,4a)') i, ' 2d '
+      write(outunit,100) name, mpp_chksum(temp2d(:,:,i:i))
+    enddo
+    do i = 1,3
+      write (name, '(i2.2,3x,4a)') i, ' 3d levsp1'
+      write(outunit,100) name, mpp_chksum(temp3dlevsp1(:,:,:,i:i))
+    enddo
+    do i = 1,14+Model%ntot3d+2*ntr
+      write (name, '(i2.2,3x,4a)') i, ' 3d levs'
+      write(outunit,100) name, mpp_chksum(temp3d(:,:,:,i:i))
+    enddo
+100 format("CHECKSUM::",A32," = ",Z20)
+
+    deallocate(temp2d)
+    deallocate(temp3d)
+    deallocate(temp3dlevsp1)
+  end subroutine fv3atm_checksum
+
+  !> @brief Reads surface, orography, CLM Lake, and RRFS-SD data.
+  !> @details Creates and populates a data type which is then used to "register"
+  !>  restart variables with the FMS restart subsystem.
+  !>  Calls an FMS routine to restore the data from a restart file.
+  !>  Also calculates sncovr if it is not present in the restart file.
+  !>
+  !> @param[inout] Sfcprop Surface properties that may be read in and/or updated by climatology or observations
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model  Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] warm_start Logical flag indicating whether this is a warm start.
+  !> @param[in] ignore_rst_cksum Logical flag indicating whether to ignore checksums in the restart file.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine sfc_prop_restart_read (Sfcprop, Atm_block, Model, fv_domain, warm_start, ignore_rst_cksum)
+    use fv3atm_rrfs_sd_io
+    use atmosphere_mod,     only: Atm,mygrid
+    implicit none
+    !--- interface variable definitions
+    type(GFS_sfcprop_type),    intent(inout) :: Sfcprop
+    type (block_control_type), intent(in)    :: Atm_block
+    type(GFS_control_type),    intent(inout) :: Model
+    type (domain2d),           intent(in)    :: fv_domain
+    logical,                   intent(in)    :: warm_start
+    logical,                   intent(in)    :: ignore_rst_cksum
+    !--- directory of the input files
+    character(5)  :: indir='INPUT'
+    character(37) :: infile
+    character(2)  :: file_ver
+    !--- fms2_io file open logic
+    logical :: amiopen
+    logical :: override_frac_grid
+
+    type(clm_lake_data_type) :: clm_lake
+    type(rrfs_sd_state_type) :: rrfs_sd_state
+    type(rrfs_sd_emissions_type) :: rrfs_sd_emis
+    type(Oro_scale_io_data_type) :: oro_ss
+    type(Oro_scale_io_data_type) :: oro_ls
+    type(Sfc_io_data_type) :: sfc
+    type(Oro_io_data_type) :: oro
+
+    type(FmsNetcdfDomainFile_t) :: Oro_restart, Sfc_restart, dust12m_restart, emi_restart, rrfssd_restart
+    type(FmsNetcdfDomainFile_t) :: Oro_ls_restart, Oro_ss_restart
+    type(domain2D) :: domain_for_read
+    integer :: read_layout(2)
+
+    !--- OROGRAPHY FILE
+
+    !--- open file
+#ifdef ENABLE_PARALLELRESTART
+    Oro_restart%use_collective = .true.
+    call mpp_get_layout(Atm(mygrid)%domain, read_layout)
+    call mpp_copy_domain(Atm(mygrid)%domain, domain_for_read)
+    call mpp_define_io_domain(domain_for_read, read_layout)
+    Oro_restart%tile_comm = mpp_get_domain_tile_commid(Atm(mygrid)%domain)
+
+    infile=trim(indir)//'/'//trim(fn_oro)
+    amiopen=open_file(Oro_restart, trim(infile), 'read', domain=domain_for_read, is_restart=.true., dont_add_res_to_filename=.true.)
+#else
+    infile=trim(indir)//'/'//trim(fn_oro)
+    amiopen=open_file(Oro_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+#endif
+    if (.not.amiopen) call mpp_error( FATAL, 'Error with opening file '//trim(infile) )
+
+    call oro%register(Model,Oro_restart,Atm_block)
+
+    !--- read the orography restart/data
+    call mpp_error(NOTE,'reading topographic/orographic information from INPUT/oro_data.tile*.nc')
+    call read_restart(Oro_restart, ignore_checksum=ignore_rst_cksum)
+    call close_file(Oro_restart)
+
+    !--- copy data into GFS containers
+    call oro%copy(Model, Sfcprop, Atm_block)
+
+    if_smoke: if(Model%rrfs_sd) then  ! for RRFS-SD
+
+      !--- Dust input FILE
+      !--- open file
+      infile=trim(indir)//'/'//trim(fn_dust12m)
+      amiopen=open_file(dust12m_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+      if (.not.amiopen) call mpp_error( FATAL, 'Error with opening file'//trim(infile) )
+
+      !--- Register axes and variables, allocate memory:
+      call rrfs_sd_emis%register_dust12m(dust12m_restart, Atm_block)
+
+      !--- read new GSL created dust12m restart/data
+      call mpp_error(NOTE,'reading dust12m information from INPUT/dust12m_data.tile*.nc')
+      call read_restart(dust12m_restart)
+      call close_file(dust12m_restart)
+
+      !--- Copy to Sfcprop and free temporary arrays:
+      call rrfs_sd_emis%copy_dust12m(Model, Sfcprop, Atm_block)
+
+      !----------------------------------------------
+
+      !--- open anthropogenic emission file
+      infile=trim(indir)//'/'//trim(fn_emi)
+      amiopen=open_file(emi_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+      if (.not.amiopen) call mpp_error( FATAL, 'Error with opening file'//trim(infile) )
+
+      ! Register axes and variables, allocate memory
+      call rrfs_sd_emis%register_emi(emi_restart, Atm_block)
+
+      !--- read anthropogenic emi restart/data
+      call mpp_error(NOTE,'reading emi information from INPUT/emi_data.tile*.nc')
+      call read_restart(emi_restart)
+      call close_file(emi_restart)
+
+      !--- Copy to Sfcprop and free temporary arrays:
+      call rrfs_sd_emis%copy_emi(Model, Sfcprop, Atm_block)
+
+      !----------------------------------------------
+
+      !--- Dust input FILE
+      !--- open file
+      infile=trim(indir)//'/'//trim(fn_rrfssd)
+      amiopen=open_file(rrfssd_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+      if (.not.amiopen) call mpp_error( FATAL, 'Error with opening file'//trim(infile) )
+
+      ! Register axes and variables, allocate memory
+      call rrfs_sd_emis%register_fire(Model, rrfssd_restart, Atm_block)
+
+      !--- read new GSL created rrfssd restart/data
+      call mpp_error(NOTE,'reading rrfssd information from INPUT/SMOKE_RRFS_data.nc')
+      call read_restart(rrfssd_restart)
+      call close_file(rrfssd_restart)
+
+      !--- Copy to Sfcprop and free temporary arrays:
+      call rrfs_sd_emis%copy_fire(Model, Sfcprop, Atm_block)
+
+    endif if_smoke  ! RRFS_SD
+
+    !--- Modify/read-in additional orographic static fields for GSL drag suite
+    if (Model%gwd_opt==3 .or. Model%gwd_opt==33 .or. &
+         Model%gwd_opt==2 .or. Model%gwd_opt==22 ) then
+
+      if ( (Model%gwd_opt==3 .or. Model%gwd_opt==33) .or.    &
+           ( (Model%gwd_opt==2 .or. Model%gwd_opt==22) .and. &
+           Model%do_gsl_drag_ls_bl ) ) then
+        !--- open restart file
+        infile=trim(indir)//'/'//trim(fn_oro_ls)
+        amiopen=open_file(Oro_ls_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+        if( .not.amiopen ) call mpp_error( FATAL, 'Error with opening file '//trim(infile) )
+        call oro_ls%register(Model,Oro_ls_restart,Atm_block)
+        !--- read new GSL created orography restart/data
+        call mpp_error(NOTE,'reading topographic/orographic information from &
+             &INPUT/oro_data_ls.tile*.nc')
+        call read_restart(Oro_ls_restart, ignore_checksum=ignore_rst_cksum)
+        call close_file(Oro_ls_restart)
+        call oro_ls%copy(Model,Sfcprop,Atm_block,1)
+      endif
+
+      !--- open restart file
+      infile=trim(indir)//'/'//trim(fn_oro_ss)
+      amiopen=open_file(Oro_ss_restart, trim(infile), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+      if( .not.amiopen ) call mpp_error( FATAL, 'Error with opening file '//trim(infile) )
+      call oro_ss%register(Model,Oro_ss_restart,Atm_block)
+      call mpp_error(NOTE,'reading topographic/orographic information from &
+           &INPUT/oro_data_ss.tile*.nc')
+      call read_restart(Oro_ss_restart, ignore_checksum=ignore_rst_cksum)
+      call close_file(Oro_ss_restart)
+      call oro_ss%copy(Model,Sfcprop,Atm_block,15)
+    end if
+
+    !--- SURFACE FILE
+
+    !--- open file
+#ifdef ENABLE_PARALLELRESTART
+    Sfc_restart%use_collective = .true.
+    Sfc_restart%tile_comm = mpp_get_domain_tile_commid(Atm(mygrid)%domain)
+
+    infile=trim(indir)//'/'//trim(fn_srf)
+    amiopen=open_file(Sfc_restart, trim(infile), "read", domain=domain_for_read, is_restart=.true., dont_add_res_to_filename=.true.)
+#else
+    infile=trim(indir)//'/'//trim(fn_srf)
+    amiopen=open_file(Sfc_restart, trim(infile), "read", domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+#endif
+    if( .not.amiopen ) call mpp_error(FATAL, 'Error opening file'//trim(infile))
+
+    if (global_att_exists(Sfc_restart, "file_version")) then
+      call get_global_attribute(Sfc_restart, "file_version", file_ver)
+      Model%sfc_file_version = file_ver
+      if (file_ver == "V2") then
+        sfc%is_v2_file=.true.
+      endif
+    endif
+
+    if(sfc%allocate_arrays(Model, Atm_block, .true., warm_start)) then
+      if (sfc%is_v2_file) then
+        call sfc%fill_2d_names_v2(Model, warm_start)
+      else
+        call sfc%fill_2d_names(Model, warm_start)
+      endif
+      call sfc%register_axes(Model, Sfc_restart, .true., warm_start)
+
+      ! Tell CLM Lake to allocate data, and register its axes and fields
+      if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_clm) then
+        call clm_lake%allocate_data(Model)
+        call clm_lake%fill_data(Model,Atm_block,Sfcprop)
+        call clm_lake%copy_from_grid(Model,Atm_block,Sfcprop)
+        call clm_lake%register_axes(Model, Sfc_restart)
+        call clm_lake%register_fields(Sfc_restart)
+      endif
+
+      if(Model%rrfs_sd) then
+        call rrfs_sd_state%allocate_data(Model)
+        call rrfs_sd_state%fill_data(Model, Atm_block, Sfcprop)
+        call rrfs_sd_state%register_axis(Model, Sfc_restart)
+        call rrfs_sd_state%register_fields(Sfc_restart)
+      endif
+
+      call sfc%register_2d_fields(Model,Sfc_restart,.true.,warm_start)
+    endif  ! if not allocated
+
+    call sfc%fill_3d_names(Model,warm_start)
+    call sfc%register_3d_fields(Model,Sfc_restart,.true.,warm_start)
+    call sfc%init_fields(Model)
+
+    !--- read the surface restart/data
+    call mpp_error(NOTE,'reading surface properties data from INPUT/sfc_data.tile*.nc')
+    call read_restart(Sfc_restart, ignore_checksum=ignore_rst_cksum)
+    call close_file(Sfc_restart)
+
+    ! Tell clm_lake to copy data to temporary arrays
+    if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_clm) then
+      call clm_lake%copy_to_grid(Model,Atm_block,Sfcprop)
+    endif
+
+    if(Model%rrfs_sd) then
+      call rrfs_sd_state%copy_to_grid(Model,Atm_block,Sfcprop)
+    end if
+
+    !   write(0,*)' stype read in min,max=',minval(sfc%var2(:,:,35)),maxval(sfc%var2(:,:,35)),' sfc%name2=',sfc%name2(35)
+    !   write(0,*)' stype read in min,max=',minval(sfc%var2(:,:,18)),maxval(sfc%var2(:,:,18))
+    !   write(0,*)' sfc%var2=',sfc%var2(:,:,12)
+
+    !--- place the data into the block GFS containers
+    override_frac_grid=Model%frac_grid
+    call sfc%copy_to_grid(Model, Atm_block, Sfcprop, warm_start, override_frac_grid)
+    Model%frac_grid=override_frac_grid
+
+    call mpp_error(NOTE, 'gfs_driver:: - after put to container ')
+
+    call sfc%apply_safeguards(Model, Atm_block, Sfcprop)
+
+    ! A standard-compliant Fortran 2003 compiler will call clm_lake_final and rrfs_sd_final here.
+
+  end subroutine sfc_prop_restart_read
+
+  !> @brief Writes surface restart data without using the write component.
+  !> @details Routine to write out GFS surface restarts via the FMS restart
+  !>  subsystem. Takes an optional argument to append timestamps for intermediate
+  !>  restarts.
+  !>
+  !> @param[inout] Sfcprop surface properties that may be read in and/or updated by climatology or observations.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] timestamp Optional timestamp to append to the restart filename.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine sfc_prop_restart_write (Sfcprop, Atm_block, Model, fv_domain, timestamp)
+    use fv3atm_rrfs_sd_io
+    implicit none
+    !--- interface variable definitions
+    type(GFS_sfcprop_type),      intent(in) :: Sfcprop
+    type(block_control_type),    intent(in) :: Atm_block
+    type(GFS_control_type),      intent(in) :: Model
+    type(domain2d),              intent(in) :: fv_domain
+    character(len=32), optional, intent(in) :: timestamp
+    !--- directory of the input files
+    character(7)  :: indir='RESTART'
+    character(72) :: infile
+    !--- fms2_io file open logic
+    logical :: amiopen
+    !--- variables used for fms2_io register axis
+
+    type(clm_lake_data_type), target :: clm_lake
+    type(rrfs_sd_state_type) :: rrfs_sd_state
+    type(Sfc_io_data_type) :: sfc
+    type(FmsNetcdfDomainFile_t) :: Sfc_restart
+
+    !--- set filename
+    infile=trim(indir)//'/'//trim(fn_srf)
+    if( present(timestamp) ) infile=trim(indir)//'/'//trim(timestamp)//'.'//trim(fn_srf)
+
+    !--- register axis
+    amiopen=open_file(Sfc_restart, trim(infile), 'overwrite', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+    if_amiopen: if( amiopen ) then
+      call sfc%register_axes(Model, Sfc_restart, .false., .true.)
+      call sfc%write_axes(Model, Sfc_restart)
+    else
+      call mpp_error(FATAL, 'Error in opening file'//trim(infile) )
+    end if if_amiopen
+
+    ! Tell clm_lake to allocate data, register its axes, and call write_data for each axis's variable
+    if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_clm) then
+      call clm_lake%allocate_data(Model)
+      call clm_lake%register_axes(Model, Sfc_restart)
+      call clm_lake%write_axes(Model, Sfc_restart)
+    endif
+
+    if(Model%rrfs_sd) then
+      call rrfs_sd_state%allocate_data(Model)
+      call rrfs_sd_state%register_axis(Model,Sfc_restart)
+      call rrfs_sd_state%write_axis(Model,Sfc_restart)
+    end if
+
+    if (sfc%allocate_arrays(Model, Atm_block, .false., .true.)) then
+      call sfc%fill_2d_names(Model,.true.)
+    end if
+
+    if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_clm) then
+      ! Tell clm_lake to register all of its fields
+      call clm_lake%register_fields(Sfc_restart)
+    endif
+
+    if(Model%rrfs_sd) then
+      call rrfs_sd_state%register_fields(Sfc_restart)
+    endif
+
+    ! Register 2D surface property fields (except lake, smoke, and dust)
+    call sfc%register_2d_fields(Model, Sfc_restart, .false., .true.)
+
+    ! Determine list of 3D surface property fields names:
+    call sfc%fill_3d_names(Model, .true.)
+
+    ! Register 3D surface property fields (except lake, smoke, and dust)
+    call sfc%register_3d_fields(Model, Sfc_restart, .false., .true.)
+
+    ! Tell clm_lake to copy Sfcprop data to its internal temporary arrays.
+    if(Model%lkm>0 .and. Model%iopt_lake==Model%iopt_lake_clm) then
+      call clm_lake%copy_from_grid(Model,Atm_block,Sfcprop)
+    endif
+
+    if(Model%rrfs_sd) then
+      call rrfs_sd_state%copy_from_grid(Model,Atm_block,Sfcprop)
+    endif
+
+    call sfc%copy_from_grid(Model, Atm_block, Sfcprop)
+
+    call write_restart(Sfc_restart)
+    call close_file(Sfc_restart)
+
+    ! A standard-compliant Fortran 2003 compiler will call rrfs_sd_final and clm_lake_final here
+
+  end subroutine sfc_prop_restart_write
+
+  !> @brief Reads the physics restart data.
+  !> @details Creates and populates a data type which is then used to "register"
+  !>  restart variables with the GFDL FMS restart subsystem.
+  !>  Calls a GFDL FMS routine to restore the data from a restart file.
+  !>
+  !> @param[inout] GFS_Restart Contains information about the restart variables.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] ignore_rst_cksum Logical flag indicating whether to ignore checksums in the restart file.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine phys_restart_read (GFS_Restart, Atm_block, Model, fv_domain, ignore_rst_cksum)
+    use atmosphere_mod,     only: Atm,mygrid
+    implicit none
+    !--- interface variable definitions
+    type(GFS_restart_type),      intent(inout) :: GFS_Restart(:)
+    type(block_control_type),    intent(in) :: Atm_block
+    type(GFS_control_type),      intent(in) :: Model
+    type(domain2d),              intent(in) :: fv_domain
+    logical,                     intent(in) :: ignore_rst_cksum
+    !--- local variables
+    integer :: i, j, k, nb, ix, num2, num3, ivar
+    integer :: isc, iec, jsc, jec, nx, ny
+    character(len=64) :: fname
+    real(kind=kind_phys), pointer, dimension(:,:)   :: var2_p => NULL()
+    real(kind=kind_phys), pointer, dimension(:,:,:) :: var3_p => NULL()
+    !--- directory of the input files
+    character(5)  :: indir='INPUT'
+    logical :: amiopen, was_allocated
+
+    type(phy_data_type) :: phy
+    type(FmsNetcdfDomainFile_t) :: Phy_restart
+    type(domain2D) :: domain_for_read
+    integer :: read_layout(2)
+
+    isc = Atm_block%isc
+    iec = Atm_block%iec
+    jsc = Atm_block%jsc
+    jec = Atm_block%jec
+    nx  = (iec - isc + 1)
+    ny  = (jec - jsc + 1)
+
+    was_allocated = phy%alloc(GFS_Restart, Atm_block)
+
+    !--- open restart file and register axes
+    fname = trim(indir)//'/'//trim(fn_phy)
+#ifdef ENABLE_PARALLELRESTART
+    Phy_restart%use_collective = .true.
+    call mpp_get_layout(Atm(mygrid)%domain, read_layout)
+    call mpp_copy_domain(Atm(mygrid)%domain, domain_for_read)
+    call mpp_define_io_domain(domain_for_read, read_layout)
+    Phy_restart%tile_comm = mpp_get_domain_tile_commid(Atm(mygrid)%domain)
+
+    amiopen=open_file(Phy_restart, trim(fname), 'read', domain=domain_for_read, is_restart=.true., dont_add_res_to_filename=.true.)
+#else
+    amiopen=open_file(Phy_restart, trim(fname), 'read', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+#endif
+    if( amiopen ) then
+      call register_axis(Phy_restart, 'xaxis_1', 'X')
+      call register_axis(Phy_restart, 'yaxis_1', 'Y')
+      call register_axis(Phy_restart, 'zaxis_1', phy%npz)
+      call register_axis(Phy_restart, 'Time', unlimited)
+    else
+      call mpp_error(NOTE,'No physics restarts - cold starting physical parameterizations')
+      return
+    endif
+
+    !--- register the restart fields
+    if(was_allocated) then
+       num2 = 0
+       num3 = 0
+       do ivar = 1,size(GFS_Restart(:)%axes)
+          num2 = num2 + 1
+          if (GFS_Restart(ivar)%axes == 2) then
+            var2_p => phy%var2(:,:,num2)
+            call register_restart_field(Phy_restart, trim(GFS_Restart(ivar)%name), var2_p, &
+                 dimensions=(/'xaxis_1','yaxis_1','Time   '/), is_optional=.true.)
+         end if
+         if (GFS_Restart(ivar)%axes == 3) then
+            num3 = num3 + 1
+            var3_p => phy%var3(:,:,:,num3)
+            call register_restart_field(Phy_restart, trim(GFS_restart(ivar)%name), var3_p, &
+                 dimensions=(/'xaxis_1','yaxis_1','zaxis_1','Time   '/), is_optional=.true.)
+         end if
+      enddo
+      nullify(var2_p)
+      nullify(var3_p)
+    endif
+
+    !--- read the surface restart/data
+    call mpp_error(NOTE,'reading physics restart data from INPUT/phy_data.tile*.nc')
+    call read_restart(Phy_restart, ignore_checksum=ignore_rst_cksum)
+    call close_file(Phy_restart)
+
+    call phy%transfer_data(.true., GFS_Restart, Atm_block, Model, .true.)
+
+  end subroutine phys_restart_read
+
+  !> @brief Writes the physics restart file without using the write component
+  !> @details Routine to write out GFS surface restarts via the FMS restart
+  !>  subsystem. Takes an optional argument to append timestamps for intermediate
+  !>  restarts.
+  !>
+  !> @param[in] GFS_Restart Contains information about the restart variables
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[in] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[in] fv_domain Contains domain decomposition information for cubed sphere grid.
+  !> @param[in] timestamp Optional timestamp to append to the restart filename.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine phys_restart_write (GFS_Restart, Atm_block, Model, fv_domain, timestamp)
+    implicit none
+    !--- interface variable definitions
+    type(GFS_restart_type),      intent(inout) :: GFS_Restart(:)
+    type(block_control_type),    intent(in   ) :: Atm_block
+    type(GFS_control_type),      intent(in   ) :: Model
+    type(domain2d),              intent(in   ) :: fv_domain
+    character(len=32), optional, intent(in   ) :: timestamp
+    !--- local variables
+    integer :: i, j, k, nb, ix, num2, num3
+    integer :: isc, iec, jsc, jec, nx, ny
+    real(kind=kind_phys), pointer, dimension(:,:)   :: var2_p => NULL()
+    real(kind=kind_phys), pointer, dimension(:,:,:) :: var3_p => NULL()
+    !--- used for axis data for fms2_io
+    integer :: is, ie, ivar
+    integer, allocatable, dimension(:) :: buffer
+    character(7) :: indir='RESTART'
+    character(72) :: infile
+    logical :: amiopen, allocated_something
+    integer :: xaxis_1_chunk, yaxis_1_chunk
+
+    type(phy_data_type) :: phy
+    type(FmsNetcdfDomainFile_t) :: Phy_restart
+
+    isc = Atm_block%isc
+    iec = Atm_block%iec
+    jsc = Atm_block%jsc
+    jec = Atm_block%jec
+    nx  = (iec - isc + 1)
+    ny  = (jec - jsc + 1)
+
+    !--- register the restart fields
+    allocated_something = phy%alloc(GFS_Restart, Atm_block)
+
+    !--- set file name
+    infile=trim(indir)//'/'//trim(fn_phy)
+    if( present(timestamp) ) infile=trim(indir)//'/'//trim(timestamp)//'.'//trim(fn_phy)
+    !--- register axis
+    amiopen=open_file(Phy_restart, trim(infile), 'overwrite', domain=fv_domain, is_restart=.true., dont_add_res_to_filename=.true.)
+    if( amiopen ) then
+      call register_axis(Phy_restart, 'xaxis_1', 'X')
+      call register_field(Phy_restart, 'xaxis_1', axis_type, (/'xaxis_1'/))
+      call register_variable_attribute(Phy_restart, 'xaxis_1', 'cartesian_axis', 'X', str_len=1)
+      call get_global_io_domain_indices(Phy_restart, 'xaxis_1', is, ie, indices=buffer)
+      call write_data(Phy_restart, "xaxis_1", buffer)
+      deallocate(buffer)
+      call get_dimension_size(Phy_restart, 'xaxis_1', xaxis_1_chunk)
+
+      call register_axis(Phy_restart, 'yaxis_1', 'Y')
+      call register_field(Phy_restart, 'yaxis_1', axis_type, (/'yaxis_1'/))
+      call register_variable_attribute(Phy_restart, 'yaxis_1', 'cartesian_axis', 'Y', str_len=1)
+      call get_global_io_domain_indices(Phy_restart, 'yaxis_1', is, ie, indices=buffer)
+      call write_data(Phy_restart, "yaxis_1", buffer)
+      deallocate(buffer)
+      call get_dimension_size(Phy_restart, 'yaxis_1', yaxis_1_chunk)
+
+      call register_axis(Phy_restart, 'zaxis_1', phy%npz)
+      call register_field(Phy_restart, 'zaxis_1', axis_type, (/'zaxis_1'/))
+      call register_variable_attribute(Phy_restart, 'zaxis_1', 'cartesian_axis', 'Z', str_len=1)
+      allocate( buffer(phy%npz) )
+      do i=1, phy%npz
+        buffer(i)=i
+      end do
+      call write_data(Phy_restart, "zaxis_1", buffer)
+      deallocate(buffer)
+
+      call register_axis(Phy_restart, 'Time', unlimited)
+      call register_field(Phy_restart, 'Time', axis_type, (/'Time'/))
+      call register_variable_attribute(Phy_restart, 'Time', 'cartesian_axis', 'T', str_len=1)
+      call write_data(Phy_restart, "Time", 1)
+    else
+      call mpp_error(FATAL, 'Error opening file '//trim(infile))
+    end if
+
+    num2 = 0
+    num3 = 0
+    do ivar = 1,size(GFS_restart(:)%axes)
+       if (GFS_Restart(ivar)%axes == 2) then
+          num2 = num2 + 1
+          var2_p => phy%var2(:,:,num2)
+          call register_restart_field(Phy_restart, trim(GFS_Restart(ivar)%name), var2_p, &
+               dimensions=(/'xaxis_1','yaxis_1','Time   '/),&
+               chunksizes=(/xaxis_1_chunk,yaxis_1_chunk,1/), is_optional=.true.)
+       endif
+       if (GFS_Restart(ivar)%axes == 3) then
+          num3 = num3 + 1
+          var3_p => phy%var3(:,:,:,num3)
+          call register_restart_field(Phy_restart, trim(GFS_Restart(ivar)%name), var3_p,&
+               dimensions=(/'xaxis_1','yaxis_1','zaxis_1','Time   '/),&
+               chunksizes=(/xaxis_1_chunk,yaxis_1_chunk,1,1/), is_optional=.true.)
+       endif
+    enddo
+    nullify(var2_p)
+    nullify(var3_p)
+
+    call phy%transfer_data(.false., GFS_Restart, Atm_block, Model, .false.)
+
+    call write_restart(Phy_restart)
+    call close_file(Phy_restart)
+
+  end subroutine phys_restart_write
+
+  !> @brief Allocates buffers and registers fields for a quilting (write component) restart.
+  !> @details Allocates all data buffers and sets variable names for surface and physics restarts.
+  !>
+  !> @param[inout] Sfcprop Surface properties that may be read in and/or updated by climatology or observations.
+  !> @param[inout] GFS_Restart Contains information about the restart variables.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[inout] Model Model control parameters input from a nml and/or derived from others.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv3atm_restart_register (Sfcprop, GFS_restart, Atm_block, Model)
+    implicit none
+
+    type(GFS_sfcprop_type),      intent(in) :: Sfcprop
+    type(GFS_restart_type),      intent(in) :: GFS_Restart(:)
+    type(block_control_type),    intent(in) :: Atm_block
+    type(GFS_control_type),      intent(in) :: Model
+
+    logical was_changed
+
+    !--------------- phy
+    was_changed = phy_quilt%alloc(GFS_Restart, Atm_block)
+
+    !--------------- sfc
+    was_changed = sfc_quilt%allocate_arrays(Model, Atm_block, .false., .true.)
+    call sfc_quilt%fill_2d_names(Model, .true.)
+    call sfc_quilt%fill_3d_names(Model, .true.)
+
+    if(Model%iopt_lake == 2 .and. Model%lkm > 0) then
+      call clm_lake_quilt%allocate_data(Model)
+      call clm_lake_quilt%fill_data(Model, Atm_block, Sfcprop)
+    endif
+
+    if(Model%rrfs_sd) then
+      call rrfs_sd_quilt%allocate_data(Model)
+      call rrfs_sd_quilt%fill_data(Model, Atm_block, Sfcprop)
+    endif
+
+  end subroutine fv3atm_restart_register
+
+  !> @brief Copies physics restart fields from write component data structures to the model grid.
+  !>
+  !> @param[in] GFS_Restart Contains information about the restart variables.
+  !> @param[in] Atm_block Physics block layout information.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv_phy_restart_output(GFS_Restart, Atm_block, Model)
+
+    implicit none
+
+    type(GFS_restart_type),   intent(inout) :: GFS_Restart(:)
+    type(block_control_type), intent(in   ) :: Atm_block
+    type(GFS_control_type),   intent(in   ) :: Model
+
+    call phy_quilt%transfer_data(.false., GFS_Restart, Atm_block, Model, .false.)
+
+  end subroutine fv_phy_restart_output
+
+  !> @brief Copies physics restart fields from the model grid to write component data structures
+  !>
+  !> @param[in] Sfcprop Surface properties that may be read in and/or updated by climatology or observations.
+  !> @param[in] Atm_block Physics block layout information.
+  !> @param[in] Model Model control parameters input from a nml and/or derived from others.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv_sfc_restart_output(Sfcprop, Atm_block, Model)
+    !--- interface variable definitions
+    implicit none
+
+    type(GFS_sfcprop_type),      intent(in) :: Sfcprop
+    type(block_control_type),    intent(in) :: Atm_block
+    type(GFS_control_type),      intent(in) :: Model
+
+    call sfc_quilt%copy_from_grid(Model, Atm_block, Sfcprop)
+    if(Model%iopt_lake == 2 .and. Model%lkm > 0) then
+      call clm_lake_quilt%copy_from_grid(Model, Atm_block, Sfcprop)
+    endif
+    if(Model%rrfs_sd) then
+      call rrfs_sd_quilt%copy_from_grid(Model, Atm_block, Sfcprop)
+    endif
+
+  end subroutine fv_sfc_restart_output
+
+  !> @brief Creates the ESMF bundle for physics restart data
+  !>
+  !> @param[inout] bundle ESMF field bundle for physics restart data.
+  !> @param[inout] grid ESMF grid for physics restart data.
+  !> @param[out] rc Return code.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv_phy_restart_bundle_setup(bundle, grid, rc)
+    use esmf
+
+    implicit none
+
+    type(ESMF_FieldBundle),intent(inout)        :: bundle
+    type(ESMF_Grid),intent(inout)               :: grid
+    integer,intent(out)                         :: rc
+
+    !*** local variables
+    integer i
+    character(128)    :: bdl_name
+    character(128)    :: outputfile
+    real(kind_phys),dimension(:,:),pointer   :: temp_r2d
+    real(kind_phys),dimension(:,:,:),pointer   :: temp_r3d
+    integer :: num
+    real(kind_phys), allocatable :: axis_values(:)
+
+    if (.not. associated(phy_quilt%var2)) then
+      write(0,*)'ERROR phy_quilt%var2, NOT allocated'
+    endif
+    if (.not. associated(phy_quilt%var3)) then
+      write(0,*)'ERROR phy_quilt%var3 NOT allocated'
+    endif
+
+    call ESMF_FieldBundleGet(bundle, name=bdl_name,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    outputfile = trim(bdl_name)
+
+    !*** add esmf fields
+
+    do num = 1,phy_quilt%nvar2d
+      temp_r2d => phy_quilt%var2(:,:,num)
+      call create_2d_field_and_add_to_bundle(temp_r2d, trim(phy_quilt%var2_names(num)), trim(outputfile), grid, bundle)
+    enddo
+
+    allocate(axis_values(phy_quilt%npz))
+    axis_values = (/ (i, i=1,phy_quilt%npz) /)
+
+    do num = 1,phy_quilt%nvar3d
+      temp_r3d => phy_quilt%var3(:,:,:,num)
+      call create_3d_field_and_add_to_bundle(temp_r3d, trim(phy_quilt%var3_names(num)), "zaxis_1", axis_values, trim(outputfile), grid, bundle)
+    enddo
+
+    deallocate(axis_values)
+
+  end subroutine fv_phy_restart_bundle_setup
+
+  !> @brief Creates the ESMF bundle for surface restart data
+  !>
+  !> @param[inout] bundle ESMF field bundle for surface restart data.
+  !> @param[inout] grid ESMF grid for surface restart data.
+  !> @param[in] Model Model control parameters input from a nml and/or derived from others.
+  !> @param[out] rc Return code.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine fv_sfc_restart_bundle_setup(bundle, grid, Model, rc)
+    use esmf
+
+    implicit none
+
+    type(ESMF_FieldBundle),intent(inout)        :: bundle
+    type(ESMF_Grid),intent(inout)               :: grid
+    type(GFS_control_type),          intent(in) :: Model
+    integer,intent(out)                         :: rc
+
+    !*** local variables
+    character(128)    :: sfcbdl_name
+    character(128)    :: outputfile
+
+    call ESMF_FieldBundleGet(bundle, name=sfcbdl_name,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    outputfile = trim(sfcbdl_name)
+
+    !*** add esmf fields
+
+    call sfc_quilt%bundle_2d_fields(bundle, grid, Model, outputfile)
+    call sfc_quilt%bundle_3d_fields(bundle, grid, Model, outputfile)
+
+    if(Model%iopt_lake == 2 .and. Model%lkm > 0) then
+      call clm_lake_quilt%bundle_fields(bundle, grid, Model, outputfile)
+    endif
+    if(Model%rrfs_sd) then
+      call rrfs_sd_quilt%bundle_fields(bundle, grid, Model, outputfile)
+    endif
+
+    if (trim(Model%sfc_file_version) /= "V1") then
+       call ESMF_AttributeAdd(bundle, convention="NetCDF", purpose="FV3", attrList=(/"file_version"/), rc=rc)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+       call ESMF_AttributeSet(bundle, convention="NetCDF", purpose="FV3", name="file_version", value=trim(Model%sfc_file_version), rc=rc)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    end if
+
+  end subroutine fv_sfc_restart_bundle_setup
+
+  !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+  !
+  !                     PRIVATE SUBROUTINES
+  !
+  !%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+  !> @brief Allocates and fills internal data structures for quilt or non-quilt physics restart I/O
+  !> @details Allocates the variable and variable name data structures in the phy_data_type.
+  !> Also, copies the GFS_Restart names to the phy_data_type arrays.
+  !> Do not call from outside this module; it is part of the internal implementation.
+  !>
+  !> @param[inout] phy Storage for reading and writing physics restart files.
+  !> @param[in] GFS_Restart Contains information about the restart variables.
+  !> @param[in] Atm_block Physics block layout information.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  logical function phy_data_alloc(phy, GFS_Restart, Atm_block)
+    use fv3atm_common_io, only: get_nx_ny_from_atm
+    implicit none
+    class(phy_data_type) :: phy
+    type(GFS_restart_type),      intent(in) :: GFS_Restart(:)
+    type(block_control_type),    intent(in) :: Atm_block
+
+    integer :: nx, ny, ivar, num2, num3
+
+    phy_data_alloc = .false.
+
+    if(associated(phy%var2)) return
+
+    call get_nx_ny_from_atm(Atm_block, nx, ny)
+    phy%npz = Atm_block%npz
+
+    !
+    ! Count the number of 2D and 3D restart fields, allocate space for physics data,
+    ! and gather metadata (e.g. names) for each field.
+    !
+    phy%nvar2d = 0
+    phy%nvar3d = 0
+    do ivar = 1,size(GFS_restart(:)%axes)
+       if (GFS_restart(ivar)%axes == 2) phy%nvar2d = phy%nvar2d + 1
+       if (GFS_restart(ivar)%axes == 3) phy%nvar3d = phy%nvar3d + 1
+    enddo
+    allocate (phy%var2(nx,ny,phy%nvar2d), phy%var2_names(phy%nvar2d))
+    allocate (phy%var3(nx,ny,phy%npz,phy%nvar3d), phy%var3_names(phy%nvar3d))
+    phy%var2 = zero
+    phy%var3 = zero
+    num2 = 0
+    num3 = 0
+    do ivar = 1,size(GFS_restart(:)%axes)
+       if (GFS_restart(ivar)%axes == 2) then
+          num2 = num2 + 1
+          phy%var2_names(num2) = trim(GFS_Restart(ivar)%name)
+       end if
+       if (GFS_restart(ivar)%axes == 3)	then
+          num3 = num3 + 1
+          phy%var3_names(num3) = trim(GFS_Restart(ivar)%name)
+       endif
+    enddo
+    phy_data_alloc = .true.
+  end function phy_data_alloc
+
+  !> @brief Copies data between the internal physics restart data structures and the model grid
+  !> @details Restart I/O stores data in temporary arrays while interfacing with ESMF or FMS. This procedure
+  !>  copies between the temporary arrays and the model grid. The "reading" flag controls the
+  !>  direction of the copy. For reading=.true., data is copied from the temporary arrays to the
+  !>  model grid (during restart read). For reading=.false., data is copied from the model grid to
+  !>  temporary arrays (for writing the restart).
+  !> 
+  !> @param phy Storage for reading and writing physics restart files.
+  !> @param[in] reading Logical flag indicating the direction of the copy (true=to model grid, false=from model grid).
+  !> @param GFS_Restart Contains information about the restart variables.
+  !> @param Atm_block Physics block layout information.
+  !> @param[in] Model Model control parameters input from a nml and/or derived from others.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine phy_data_transfer_data(phy, reading, GFS_Restart, Atm_block, Model, reset_diag)
+    use mpp_mod,            only: FATAL, mpp_error
+    implicit none
+    class(phy_data_type) :: phy
+    logical, intent(in) :: reading
+    type(GFS_restart_type), intent(inout) :: GFS_Restart(:)
+    type(block_control_type) :: Atm_block
+    type(GFS_control_type), intent(in) :: Model
+    logical, intent(in) :: reset_diag
+
+    integer :: i, j, k, ivar, nb, ix, im, num2, num3
+
+    !--- register the restart fields
+    if (.not. associated(phy%var2)) then
+      call mpp_error(FATAL,'phy%var2 must be allocated')
+      return ! should never get here
+    endif
+    if (.not. associated(phy%var3)) then
+      call mpp_error(FATAL,'phy%var3 must be allocated')
+      return ! should never get here
+    endif
+
+    !--- place the data into the contiguous GFS containers.
+    if(reading) then
+       ! 2D
+       num2 = 0
+       num3 = 0
+       do ivar = 1,size(GFS_restart(:)%axes)
+          if (GFS_restart(ivar)%axes == 2) then
+             num2 = num2 + 1
+             !$omp parallel do default(shared) private(i, j, nb, ix, im)
+             do nb = 1,Atm_block%nblks
+                do ix = 1, Atm_block%blksz(nb)
+                   im = Model%chunk_begin(nb)+ix-1
+                   i = Atm_block%index(nb)%ii(ix) - Atm_block%isc + 1
+                   j = Atm_block%index(nb)%jj(ix) - Atm_block%jsc + 1
+                   GFS_Restart(ivar)%data%var2(im) = phy%var2(i,j,num2)
+                   !--- if restart from init time, reset accumulated diag fields
+                   if (reset_diag) then
+                      if (GFS_restart(ivar)%reset .and. Model%phour < 1.e-7) then
+                         GFS_Restart(ivar)%data%var2(im) = zero
+                      endif
+                   endif
+                enddo
+             enddo
+          endif
+          ! 3D
+          if (GFS_restart(ivar)%axes == 3) then
+             num3 = num3 + 1
+             !$omp parallel do default(shared) private(i, j, k, nb, ix, im)
+             do nb = 1,Atm_block%nblks
+                do k=1,phy%npz
+                   do ix = 1, Atm_block%blksz(nb)
+                      im = Model%chunk_begin(nb)+ix-1
+                      i = Atm_block%index(nb)%ii(ix) - Atm_block%isc + 1
+                      j = Atm_block%index(nb)%jj(ix) - Atm_block%jsc + 1
+                      GFS_Restart(ivar)%data%var3(im,k) = phy%var3(i,j,k,num3)
+                   enddo
+                enddo
+             enddo
+          endif
+       enddo
+       
+    !--- place the data into the phy%var* variables.
+    else
+       num2 = 0
+       num3 = 0
+       do ivar = 1,size(GFS_restart(:)%axes)
+          ! 2D
+          if (GFS_restart(ivar)%axes == 2) then
+             num2 = num2 + 1
+             !$omp parallel do default(shared) private(i, j, nb, ix, im)
+             do nb = 1,Atm_block%nblks
+                do ix = 1, Atm_block%blksz(nb)
+                   im = Model%chunk_begin(nb)+ix-1
+                   i = Atm_block%index(nb)%ii(ix) - Atm_block%isc + 1
+                   j = Atm_block%index(nb)%jj(ix) - Atm_block%jsc + 1
+                   phy%var2(i,j,num2) = GFS_Restart(ivar)%data%var2(im)
+                enddo
+             enddo
+          endif
+          ! 3D
+          if (GFS_restart(ivar)%axes == 3) then
+             num3 = num3 + 1
+             !$omp parallel do default(shared) private(i, j, k, nb, ix, im)
+             do nb = 1,Atm_block%nblks
+                do k=1,phy%npz
+                   do ix = 1, Atm_block%blksz(nb)
+                      im = Model%chunk_begin(nb)+ix-1
+                      i = Atm_block%index(nb)%ii(ix) - Atm_block%isc + 1
+                      j = Atm_block%index(nb)%jj(ix) - Atm_block%jsc + 1
+                      phy%var3(i,j,k,num3) = GFS_Restart(ivar)%data%var3(im,k)
+                   enddo
+                enddo
+             enddo
+          endif
+       enddo
+    endif
+
+  end subroutine phy_data_transfer_data
+
+  !> @brief Destructor for phy_data_type
+  !>
+  !> @param phy Storage for reading and writing physics restart files.
+  !>
+  !> @author Samuel Trahan @date Jun 20, 2023
+  subroutine phy_data_final(phy)
+    implicit none
+    type(phy_data_type) :: phy
+
+    ! This #define reduces code length by a lot
+#define IF_ASSOC_DEALLOC_NULL(var) \
+    if(associated(phy%var)) then ; \
+      deallocate(phy%var) ; \
+      nullify(phy%var) ; \
+    endif
+
+    IF_ASSOC_DEALLOC_NULL(var2)
+    IF_ASSOC_DEALLOC_NULL(var3)
+    IF_ASSOC_DEALLOC_NULL(var2_names)
+    IF_ASSOC_DEALLOC_NULL(var3_names)
+
+#undef IF_ASSOC_DEALLOC_NULL
+  end subroutine phy_data_final
+
+end module fv3atm_restart_io_mod

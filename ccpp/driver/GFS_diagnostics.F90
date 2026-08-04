@@ -118,7 +118,6 @@ module GFS_diagnostics
 !     ExtDiag%data%var3(:,:)       [real*8  ]   pointer to 3D data [=> null() for a 2D field] !
 !---------------------------------------------------------------------------------------------!
 
-    use parse_tracers,    only: get_tracer_index
     implicit none
 !
 !  ---  interface variables
@@ -780,6 +779,97 @@ module GFS_diagnostics
     endif
   endif
 
+!IVAI
+!--- air quality diagnostics ---
+  if (Model%cplaqm) then
+
+! IVAI: photdiag fields
+    if (associated(IntDiag%coszens)) then
+      idx = idx + 1
+      ExtDiag(idx)%axes = 2
+      ExtDiag(idx)%name = 'COSZENS'
+      ExtDiag(idx)%desc = 'Cosine Solar Zenith Angle for Photolysis'
+      ExtDiag(idx)%unit = 'numerical'
+      ExtDiag(idx)%mod_name = 'gfs_phys'
+      ExtDiag(idx)%data%var2 => IntDiag%coszens(:)
+    endif
+
+    if (associated(IntDiag%jo3o1d)) then
+      idx = idx + 1
+      ExtDiag(idx)%axes = 2
+      ExtDiag(idx)%name = 'JO3O1D'
+      ExtDiag(idx)%desc = 'photolysis rate O3 for canopy correction'
+      ExtDiag(idx)%unit = 'min-1'
+      ExtDiag(idx)%mod_name = 'gfs_phys'
+      ExtDiag(idx)%data%var2 => IntDiag%jo3o1d(:)
+    endif
+
+    if (associated(IntDiag%jno2)) then
+      idx = idx + 1
+      ExtDiag(idx)%axes = 2
+      ExtDiag(idx)%name = 'JNO2'
+      ExtDiag(idx)%desc = 'photolysis rate NO2 for canopy correction'
+      ExtDiag(idx)%unit = 'min-1'
+      ExtDiag(idx)%mod_name = 'gfs_phys'
+      ExtDiag(idx)%data%var2 => IntDiag%jno2(:)
+    endif
+
+!IVAI: canopy arrays read via aqm_emis_read
+    if (Model%do_canopy) then
+      if (associated(IntDiag%claie)) then
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CLAIE'
+        ExtDiag(idx)%desc = 'Leaf Area Index ECCC'
+        ExtDiag(idx)%unit = 'numerical'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%data%var2 => IntDiag%claie(:)
+      endif
+
+      if (associated(IntDiag%cfch)) then
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CFCH'
+        ExtDiag(idx)%desc = 'Forest Canopy Height'
+        ExtDiag(idx)%unit = 'm'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%data%var2 => IntDiag%cfch(:)
+      endif
+
+      if (associated(IntDiag%cfrt)) then
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CFRT'
+        ExtDiag(idx)%desc = 'Forest Canopy Fraction'
+        ExtDiag(idx)%unit = 'numerical'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%data%var2 => IntDiag%cfrt(:)
+      endif
+
+      if (associated(IntDiag%cclu)) then
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CCLU'
+        ExtDiag(idx)%desc = 'Canopy Clumping Index'
+        ExtDiag(idx)%unit = 'numerical'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%data%var2 => IntDiag%cclu(:)
+      endif
+
+      if (associated(IntDiag%cpopu)) then
+        idx = idx + 1
+        ExtDiag(idx)%axes = 2
+        ExtDiag(idx)%name = 'CPOPU'
+        ExtDiag(idx)%desc = 'Population Density for canopy correction'
+        ExtDiag(idx)%unit = 'km-2'
+        ExtDiag(idx)%mod_name = 'gfs_phys'
+        ExtDiag(idx)%data%var2 => IntDiag%cpopu(:)
+      endif
+    endif ! (Model%do_canopy)
+
+  end if ! (Model%cplaqm)
+!IVAI
+
 !
 !
 !--- accumulated diagnostics ---
@@ -1044,7 +1134,7 @@ module GFS_diagnostics
     ExtDiag(idx)%cnvfac = cn_th
     ExtDiag(idx)%time_avg = .TRUE.
     ExtDiag(idx)%intpl_method = 'bilinear'
-    ExtDiag(idx)%data%var2 => IntDiag%totprcpb(:)
+    ExtDiag(idx)%data%var2 => IntDiag%totprcpb(:,1)
 
     idx = idx + 1
     ExtDiag(idx)%axes = 2
@@ -1196,7 +1286,7 @@ module GFS_diagnostics
     ExtDiag(idx)%cnvfac = cn_th
     ExtDiag(idx)%time_avg = .TRUE.
     ExtDiag(idx)%intpl_method = 'bilinear'
-    ExtDiag(idx)%data%var2 => IntDiag%cnvprcpb(:)
+    ExtDiag(idx)%data%var2 => IntDiag%cnvprcpb(:,1)
 
     idx = idx + 1
     ExtDiag(idx)%axes = 2
@@ -1230,7 +1320,7 @@ module GFS_diagnostics
     ExtDiag(idx)%desc = 'maximum (magnitude) u-wind'
     ExtDiag(idx)%unit = 'm/s'
     ExtDiag(idx)%mod_name = 'gfs_phys'
-    ExtDiag(idx)%intpl_method = 'vector_bilinear'
+    ExtDiag(idx)%intpl_method = 'nearest_stod'
     ExtDiag(idx)%data%var2 => IntDiag%u10mmax(:)
 
     idx = idx + 1
@@ -1239,7 +1329,7 @@ module GFS_diagnostics
     ExtDiag(idx)%desc = 'maximum (magnitude) v-wind'
     ExtDiag(idx)%unit = 'm/s'
     ExtDiag(idx)%mod_name = 'gfs_phys'
-    ExtDiag(idx)%intpl_method = 'vector_bilinear'
+    ExtDiag(idx)%intpl_method = 'nearest_stod'
     ExtDiag(idx)%data%var2 => IntDiag%v10mmax(:)
 
     idx = idx + 1
@@ -1248,7 +1338,7 @@ module GFS_diagnostics
     ExtDiag(idx)%desc = 'maximum wind speed'
     ExtDiag(idx)%unit = 'm/s'
     ExtDiag(idx)%mod_name = 'gfs_phys'
-    ExtDiag(idx)%intpl_method = 'bilinear'
+    ExtDiag(idx)%intpl_method = 'nearest_stod'
     ExtDiag(idx)%data%var2 => IntDiag%wind10mmax(:)
 
     idx = idx + 1
@@ -3517,7 +3607,7 @@ module GFS_diagnostics
       ExtDiag(idx)%desc = 'smoke concentration'
       ExtDiag(idx)%unit = 'kg kg-1'
       ExtDiag(idx)%mod_name = 'gfs_phys'
-      ExtDiag(idx)%data%var3 => Statein%qgrs(:,:,Model%ntfsmoke)
+      ExtDiag(idx)%data%var3 => Stateout%gq0(:,:,Model%ntfsmoke)
     endif
 
     if (Model%rrfs_sd .and. Model%ntsmoke>0) then
@@ -3743,7 +3833,7 @@ module GFS_diagnostics
       endif
 
       endif  extended_smoke_dust_diagnostics
-      
+
       idx = idx + 1
       ExtDiag(idx)%axes = 3
       ExtDiag(idx)%name = 'ebu_smoke'
@@ -3854,7 +3944,7 @@ module GFS_diagnostics
 
     ! Cloud effective radii from Microphysics
     if (Model%imp_physics == Model%imp_physics_thompson .or. Model%imp_physics == Model%imp_physics_fer_hires .or. &
-        Model%imp_physics == Model%imp_physics_nssl  ) then
+        Model%imp_physics == Model%imp_physics_nssl .or. Model%imp_physics == Model%imp_physics_tempo  ) then
       idx = idx + 1
       ExtDiag(idx)%axes = 3
       ExtDiag(idx)%name = 'cleffr'

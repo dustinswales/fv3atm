@@ -125,7 +125,7 @@ module GFS_restart
        num2d = num2d + 10
        surface_layer_saves_rainprev = .true.
     endif
-    ! RUC 
+    ! RUC
     if (Model%lsm == Model%lsm_ruc) then
        num2d = num2d + 5
        surface_layer_saves_rainprev = .true.
@@ -140,7 +140,8 @@ module GFS_restart
        num2d = num2d + 2
     endif
     ! Thompson aerosol-aware
-    if (Model%imp_physics == Model%imp_physics_thompson .and. Model%ltaerosol) then
+    if ((Model%imp_physics == Model%imp_physics_thompson .or. &
+         Model%imp_physics == Model%imp_physics_tempo) .and. (Model%ltaerosol)) then
        num2d = num2d + 2
     endif
     if (Model%do_cap_suppress .and. Model%num_dfi_radar>0) then
@@ -177,7 +178,7 @@ module GFS_restart
        num3d = num3d + 9
     endif
     if (Model%rrfs_sd) then
-       num3d = num3d + 4
+       num3d = num3d + 5
     endif
     !Prognostic area fraction
     if (Model%progsigma) then
@@ -330,7 +331,7 @@ module GFS_restart
       Restart(idx)%axes = 2
       Restart(idx)%data%var2 => Sfcprop%dgraupelprv(:)
     endif
-    ! RUC 
+    ! RUC
     if (Model%lsm == Model%lsm_ruc) then
       idx = idx + 1
       Restart(idx)%name = 'ruc_2d_raincprv'
@@ -421,7 +422,8 @@ module GFS_restart
       Restart(idx)%data%var2 => Sfcprop%rainncprv(:)
     endif
     ! Thompson aerosol-aware
-    if (Model%imp_physics == Model%imp_physics_thompson .and. Model%ltaerosol) then
+    if ((Model%imp_physics == Model%imp_physics_thompson .or. &
+         Model%imp_physics == Model%imp_physics_tempo) .and. Model%ltaerosol) then
       idx = idx + 1
       Restart(idx)%name = 'thompson_2d_nwfa2d'
       Restart(idx)%axes = 2
@@ -514,7 +516,7 @@ module GFS_restart
       Restart(idx)%data%var3 => Tbd%ud_mf(:,:)
     endif
 
-    !Unified convection scheme                                                                                                                                                                    
+    !Unified convection scheme
     if (Model%imfdeepcnv == Model%imfdeepcnv_c3) then
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_prevst'
@@ -615,6 +617,10 @@ module GFS_restart
       Restart(idx)%name = 'chem3d_3'
       Restart(idx)%axes = 3
       Restart(idx)%data%var3 => Coupling%chem3d(:,:,3)
+      idx = idx + 1
+      Restart(idx)%name = 'ebu_smoke'
+      Restart(idx)%axes = 3
+      Restart(idx)%data%var3 => Coupling%ebu_smoke(:,:)
       idx = idx + 1
       Restart(idx)%name = 'ext550'
       Restart(idx)%axes = 3

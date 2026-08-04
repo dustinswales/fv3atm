@@ -1,0 +1,1934 @@
+!--------------- UFS ATM solo model ----------------
+!
+!*** The UFS ATMosphere grid component nuopc cap
+!
+! Author:  Jun Wang@noaa.gov
+!
+! revision history
+! 11 Oct 2016: J. Wang          Initial code
+! 18 Apr 2017: J. Wang          set up fcst grid component and write grid components
+! 24 Jul 2017: J. Wang          initialization and time stepping changes for coupling
+! 02 Nov 2017: J. Wang          Use Gerhard's transferable RouteHandle
+! 20 May 2025: D. Sarmiento     Handle output hour array in seperate subroutines
+! 06 Jun 2025: D. Swales        Generalization for MPAS dynamical core
+!
+
+module ufsatm_cap_mod
+
+  use ESMF
+  use NUOPC
+  use NUOPC_Model,            only: model_routine_SS => SetServices,         &
+                                    SetVM,                                   &
+                                    routine_Run,                             &
+                                    label_Advertise,                         &
+                                    label_RealizeProvided,                   &
+                                    label_Advance,                           &
+                                    label_CheckImport,                       &
+                                    label_SetRunClock,                       &
+                                    label_TimestampExport,                   &
+                                    label_Finalize,                          &
+                                    NUOPC_ModelGet
+!
+#ifdef FV3
+  use module_fv3_config,      only: quilting, quilting_restart, output_fh,   &
+                                    dt_atmos,                                &
+                                    calendar, cpl_grid_id,                   &
+                                    cplprint_flag, first_kdt
+#endif
+#ifdef MPAS
+  use module_mpas_config,     only: output_fh, dt_atmos, calendar,           &
+                                    fcst_mpi_comm, pio_ioformat, pio_iotype, &
+                                    pio_subsystem_ic, pio_stride, pio_subsystem_lbc, &
+                                    pio_subsystem_output, &
+                                    pio_numiotasks, pio_iodesc, cpl_grid_id, &
+                                    cplprint_flag, first_kdt, quilting,      &
+                                    quilting_restart
+  use module_mpas_config,     only: mpas_output_times, mpas_restart_times
+#endif
+  use module_fv3_io_def,      only: num_pes_fcst,write_groups,               &
+                                    num_files, filename_base,                &
+                                    wrttasks_per_group, n_group,             &
+                                    lead_wrttask, last_wrttask,              &
+                                    iau_offset, lflname_fulltime,            &
+                                    time_unlimited
+!
+  use module_fcst_grid_comp,  only: fcstSS => SetServices
+
+  use module_wrt_grid_comp,   only: wrtSS => SetServices,                    &
+                                    dstOutsideMaskValue,                     &
+                                    generate_dst_field_mask, add_dst_mask
+!
+  use module_cplfields,       only: importFieldsValid, queryImportFields
+
+  use module_cap_cpl,         only: diagnose_cplFields
+  use module_cplscalars,      only: flds_scalar_name, flds_scalar_num,          &
+                                    flds_scalar_index_nx, flds_scalar_index_ny, &
+                                    flds_scalar_index_ntile
+
+#ifdef UFS_TRACING
+  use ufs_trace_mod
+#endif
+  use shr_is_restart_fh_mod, only : init_is_restart_fh, is_restart_fh_type
+
+  implicit none
+  private
+  public SetServices
+  public OutputHours_FrequencyInput, OutputHours_ArrayInput
+!
+!-----------------------------------------------------------------------
+!
+
+  type(ESMF_GridComp)                         :: fcstComp
+  type(ESMF_State)                            :: fcstState
+  type(ESMF_FieldBundle), allocatable         :: fcstFB(:)
+  integer,dimension(:), allocatable           :: fcstPetList
+  integer, save                               :: FBCount
+
+  type(ESMF_GridComp),    allocatable         :: wrtComp(:)
+  type(ESMF_State),       allocatable         :: wrtState(:)
+  type(ESMF_FieldBundle), allocatable         :: wrtFB(:,:)
+
+  type(ESMF_RouteHandle), allocatable         :: routehandle(:,:)
+  type(ESMF_RouteHandle), allocatable         :: gridRedistRH(:,:)
+  type(ESMF_Grid), allocatable                :: srcGrid(:,:), dstGrid(:,:)
+  logical, allocatable                        :: is_moving_FB(:)
+
+  logical                                     :: profile_memory = .true.
+  logical                                     :: write_runtimelog = .false.
+  logical                                     :: lprint = .false.
+  logical                                     :: sync_fcst_info_to_wgc = .false.
+
+  integer                                     :: mype = -1
+  integer                                     :: dbug = 0
+  integer, allocatable                        :: frestart(:)
+
+  real(kind=8)                                :: timere, timep2re
+  type(is_restart_fh_type)                    :: restartfh_info
+  type(is_restart_fh_type)                    :: outputfh_info
+  type(is_restart_fh_type)                    :: diagfh_info
+  type(is_restart_fh_type)                    :: dafh_info
+!-----------------------------------------------------------------------
+
+  contains
+
+!-----------------------------------------------------------------------
+!------------------- Solo ufsatm code starts here ----------------------
+!-----------------------------------------------------------------------
+
+  subroutine SetServices(gcomp, rc)
+
+    type(ESMF_GridComp)  :: gcomp
+    integer, intent(out) :: rc
+    character(len=*),parameter  :: subname='(ufsatm_cap:SetServices)'
+    type(ESMF_VM)               :: vm
+
+    rc = ESMF_SUCCESS
+
+    call ESMF_GridCompGet(gcomp, vm=vm, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_VMGet(vm, localpet=mype, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace_init()
+    if (mype == 0) call ufs_trace("fv3", "SetServices", "B")
+#endif
+
+    ! the NUOPC model component will register the generic methods
+    call NUOPC_CompDerive(gcomp, model_routine_SS, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! set entry point for methods that require specific implementation
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_Advertise, specRoutine=InitializeAdvertise, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_RealizeProvided, specRoutine=InitializeRealize, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! model advance method(s)
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
+                              specRoutine=ModelAdvance, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! checking the import fields is a bit more complex because of coldstart option
+#ifdef FV3
+    call ESMF_MethodRemove(gcomp, label_CheckImport, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_CheckImport, &
+                              specRoutine=ufsatm_checkimport, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+    ! setup Run/Advance phase: phase1
+    call NUOPC_CompSetEntryPoint(gcomp, ESMF_METHOD_RUN, &
+                                 phaseLabelList=(/"phase1"/), userRoutine=routine_Run, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
+                              specPhaseLabel="phase1", specRoutine=ModelAdvance_phase1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! setup Run/Advance phase: phase2
+    call NUOPC_CompSetEntryPoint(gcomp, ESMF_METHOD_RUN, &
+                                 phaseLabelList=(/"phase2"/), userRoutine=routine_Run, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_Advance, &
+                              specPhaseLabel="phase2", specRoutine=ModelAdvance_phase2, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! specializations to set ufsatm cap run clock (model clock)
+    call ESMF_MethodRemove(gcomp, label=label_SetRunClock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_SetRunClock, &
+                                     specRoutine=ModelSetRunClock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#ifdef FV3
+    ! specializations required to support 'inline' run sequences
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_CheckImport, &
+                              specPhaseLabel="phase1", specRoutine=ufsatm_checkimport, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_TimestampExport, &
+                              specPhaseLabel="phase1", specRoutine=TimestampExport_phase1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_CheckImport, &
+                              specPhaseLabel="phase2", specRoutine=NUOPC_NoOp, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+    ! model finalize method(s)
+    call NUOPC_CompSpecialize(gcomp, specLabel=label_Finalize, &
+                              specRoutine=ModelFinalize, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "SetServices", "E")
+#endif
+  end subroutine SetServices
+
+!-----------------------------------------------------------------------------
+
+  subroutine InitializeAdvertise(gcomp, rc)
+#ifdef MPAS
+    use pio, only: pio_init, pio_setdebuglevel
+    use pio, only: PIO_REARR_BOX, PIO_REARR_SUBSET
+    use pio, only: PIO_64BIT_OFFSET, PIO_64BIT_DATA
+    use pio, only: PIO_IOTYPE_NETCDF, PIO_IOTYPE_PNETCDF
+    use pio, only: PIO_IOTYPE_NETCDF4C, PIO_IOTYPE_NETCDF4P
+#endif
+    use mpi_f08, only: MPI_Wtime
+    type(ESMF_GridComp)                    :: gcomp
+    integer, intent(out)                   :: rc
+
+! local variables
+    type(ESMF_State)                       :: importState, exportState
+    type(ESMF_Clock)                       :: clock
+
+    character(len=10)                      :: value
+    character(240)                         :: msgString
+    logical                                :: isPresent, isSet
+    type(ESMF_VM)                          :: vm, wrtVM
+    type(ESMF_Time)                        :: currTime, startTime
+    type(ESMF_TimeInterval)                :: timeStep, rsthour
+    type(ESMF_Config)                      :: cf
+    type(ESMF_RegridMethod_Flag)           :: regridmethod
+
+    integer                                :: i, j, k, urc, ist, grid_id
+    integer                                :: noutput_fh, nfh, nfh2
+    integer                                :: petcount
+    integer                                :: nfhmax_hf
+    real                                   :: nfhmax
+    real                                   :: output_startfh, outputfh, outputfh2(2)
+    logical                                :: loutput_fh, lfreq
+    logical                                :: lrestart_fh
+    character(ESMF_MAXSTR)                 :: gc_name, fb_name
+    integer,dimension(:), allocatable      :: petList, originPetList, targetPetList
+    character(len=esmf_maxstr),allocatable :: fcstItemNameList(:)
+    type(ESMF_StateItem_Flag), allocatable :: fcstItemTypeList(:)
+    character(20)                          :: cwrtcomp
+    integer                                :: isrcTermProcessing
+    type(ESMF_Info)                        :: parentInfo, childInfo, info
+    logical, allocatable                   :: is_moving(:)
+    logical                                :: needGridTransfer
+    type(ESMF_DistGrid)                    :: providerDG, acceptorDG
+    type(ESMF_Grid)                        :: grid, providerGrid
+    integer                                :: fieldCount, ii
+    type(ESMF_FieldBundle)                 :: mirrorFB
+    type(ESMF_Field), allocatable          :: fieldList(:)
+
+    character(len=*),parameter             :: subname='(ufsatm_cap:InitializeAdvertise)'
+    real(kind=8)                           :: timeis, timerhs, time_rh_fb_start, time_rh_start
+
+    integer                                :: wrttasks_per_group_from_parent, wrtLocalPet, num_threads
+    character(len=64)                      :: rh_filename
+    logical                                :: use_saved_routehandles, rh_file_exist
+    logical                                :: fieldbundle_uses_redist = .false.
+
+    integer                                :: sloc
+    type(ESMF_StaggerLoc)                  :: staggerloc
+    character(len=20)                      :: cvalue
+    character(ESMF_MAXSTR)                 :: output_grid
+    ! PIO
+    integer                                :: pio_root
+    integer                                :: pio_rearranger
+    integer                                :: pio_debug_level
+    logical                                :: needs_dst_mask
+    logical                                :: top_parent_is_global
+    integer                                :: ngrids
+    type(ESMF_Grid)                        :: src_grid, dst_grid
+    type(ESMF_Field), allocatable          :: dst_field_mask(:)
+!
+!------------------------------------------------------------------------
+!
+    rc = ESMF_SUCCESS
+    timeis = MPI_Wtime()
+
+    call ESMF_GridCompGet(gcomp, name=gc_name, vm=vm,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#ifdef FV3
+    call ESMF_VMGet(vm, petCount=petcount, localpet=mype, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+#ifdef MPAS
+    call ESMF_VMGet(vm=vm, localPet=mype, mpiCommunicator=fcst_mpi_comm%mpi_val, &
+                    petCount=petcount, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "InitializeAdvertise", "B")
+#endif
+
+    ! num_threads is needed to compute actual wrttasks_per_group_from_parent
+    call ESMF_InfoGetFromHost(gcomp, info=info, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_InfoGet(info, key="/NUOPC/Hint/PePerPet/MaxCount", value=num_threads, default=1, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! query for importState and exportState
+    call NUOPC_ModelGet(gcomp, driverClock=clock, importState=importState, exportState=exportState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#ifdef FV3
+    call ESMF_AttributeGet(gcomp, name="cpl_grid_id", value=value, defaultValue="1", &
+                           convention="NUOPC", purpose="Instance", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    cpl_grid_id = ESMF_UtilString2Int(value, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+    call ESMF_AttributeGet(gcomp, name="ProfileMemory", value=value, defaultValue="false", &
+                           convention="NUOPC", purpose="Instance", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    profile_memory = (trim(value)/="false")
+
+    call ESMF_AttributeGet(gcomp, name="RunTimeLog", value=value, defaultValue="false", &
+                           convention="NUOPC", purpose="Instance", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    write_runtimelog = (trim(value)=="true")
+
+    call ESMF_AttributeGet(gcomp, name="DumpFields", value=value, defaultValue="false", &
+                           convention="NUOPC", purpose="Instance", rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    cplprint_flag = (trim(value)=="true")
+    write(msgString,'(A,l6)') trim(subname)//' cplprint_flag = ',cplprint_flag
+    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO)
+
+    ! Read in cap debug flag
+    call NUOPC_CompAttributeGet(gcomp, name='dbug_flag', value=value, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (isPresent .and. isSet) then
+     read(value,*) dbug
+    end if
+    write(msgString,'(A,i6)') trim(subname)//' dbug = ',dbug
+    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO)
+
+#ifdef MPAS
+    ! #######################################################################################
+    !
+    ! PIO
+    !
+    ! #######################################################################################
+    ! pio_netcdf_format
+    call NUOPC_CompAttributeGet(gcomp, name='pio_netcdf_format', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       cvalue = ESMF_UtilStringUpperCase(cvalue)
+       if (trim(cvalue) .eq. 'CLASSIC') then
+          pio_ioformat = 0
+       else if (trim(cvalue) .eq. '64BIT_OFFSET') then
+          pio_ioformat = PIO_64BIT_OFFSET
+       else if (trim(cvalue) .eq. '64BIT_DATA') then
+          pio_ioformat = PIO_64BIT_DATA
+       else
+          call ESMF_LogWrite(trim("need to provide valid option for pio_ioformat (CLASSIC|64BIT_OFFSET|64BIT_DATA)"), ESMF_LOGMSG_INFO)
+          return
+       end if
+    else
+       cvalue = '64BIT_OFFSET'
+       pio_ioformat = PIO_64BIT_OFFSET
+    end if
+
+    ! pio_typename
+    call NUOPC_CompAttributeGet(gcomp, name='pio_typename', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       cvalue = ESMF_UtilStringUpperCase(cvalue)
+       if (trim(cvalue) .eq. 'NETCDF') then
+          pio_iotype = PIO_IOTYPE_NETCDF
+       else if (trim(cvalue) .eq. 'PNETCDF') then
+          pio_iotype = PIO_IOTYPE_PNETCDF
+       else if (trim(cvalue) .eq. 'NETCDF4C') then
+          pio_iotype = PIO_IOTYPE_NETCDF4C
+       else if (trim(cvalue) .eq. 'NETCDF4P') then
+          pio_iotype = PIO_IOTYPE_NETCDF4P
+       else
+          call ESMF_LogWrite(trim("need to provide valid option for pio_typename (NETCDF|PNETCDF|NETCDF4C|NETCDF4P)"), ESMF_LOGMSG_INFO)
+          return
+       end if
+    else
+       cvalue = 'PNETCDF'
+       pio_iotype = PIO_IOTYPE_PNETCDF
+    end if
+
+    ! pio_root
+    call NUOPC_CompAttributeGet(gcomp, name='pio_root', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       read(cvalue,*) pio_root
+       if (pio_root < 0) then
+          pio_root = 1
+       endif
+       pio_root = min(pio_root, petCount-1)
+    else
+       pio_root = 1
+    end if
+
+    ! pio_stride
+    call NUOPC_CompAttributeGet(gcomp, name='pio_stride', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       read(cvalue,*) pio_stride
+    else
+       pio_stride = -99
+    end if
+
+    ! pio_numiotasks
+    call NUOPC_CompAttributeGet(gcomp, name='pio_numiotasks', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       read(cvalue,*) pio_numiotasks
+    else
+       pio_numiotasks = -99
+    end if
+
+    ! check for parallel IO, it requires at least two io pes
+    if (petCount > 1 .and. pio_numiotasks == 1 .and. &
+       (pio_iotype .eq. PIO_IOTYPE_PNETCDF .or. pio_iotype .eq. PIO_IOTYPE_NETCDF4P)) then
+       pio_numiotasks = 2
+       pio_stride = min(pio_stride, petCount/2)
+    endif
+
+    if (pio_root + (pio_stride)*(pio_numiotasks-1) >= petCount .or. &
+        pio_stride <= 0 .or. pio_numiotasks <= 0 .or. pio_root < 0 .or. pio_root > petCount-1) then
+       if (petCount < 100) then
+          pio_stride = max(1, petCount/4)
+       else if(petCount < 1000) then
+          pio_stride = max(1, petCount/8)
+       else
+          pio_stride = max(1, petCount/16)
+       end if
+       if(pio_stride > 1) then
+          pio_numiotasks = petCount/pio_stride
+          pio_root = min(1, petCount-1)
+       else
+          pio_numiotasks = petCount
+          pio_root = 0
+       end if
+    end if
+
+    ! pio_rearranger
+    call NUOPC_CompAttributeGet(gcomp, name='pio_rearranger', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       cvalue = ESMF_UtilStringUpperCase(cvalue)
+       if (trim(cvalue) .eq. 'BOX') then
+          pio_rearranger = PIO_REARR_BOX
+       else if (trim(cvalue) .eq. 'SUBSET') then
+          pio_rearranger = PIO_REARR_SUBSET
+       else
+          call ESMF_LogWrite(trim("need to provide valid option for pio_rearranger (BOX|SUBSET)"), ESMF_LOGMSG_INFO)
+          return
+       end if
+    else
+       cvalue = 'SUBSET'
+       pio_rearranger = PIO_REARR_SUBSET
+    end if
+
+    ! Initialize PIO
+    allocate(pio_subsystem_ic)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, pio_rearranger, pio_subsystem_ic, base=pio_root)
+    allocate(pio_subsystem_lbc)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, pio_rearranger, pio_subsystem_lbc, base=pio_root)
+
+    allocate(pio_subsystem_output)
+    call pio_init(mype, fcst_mpi_comm%mpi_val, pio_numiotasks, 0, pio_stride, &
+         pio_rearranger, pio_subsystem_output, base=pio_root)
+
+    ! PIO debug related options
+    ! pio_debug_level
+    call NUOPC_CompAttributeGet(gcomp, name='pio_debug_level', value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (isPresent .and. isSet) then
+       read(cvalue,*) pio_debug_level
+       if (pio_debug_level < 0 .or. pio_debug_level > 6) then
+          call ESMF_LogWrite(trim("MPAS_NUOPC_CAP: need to provide valid option for pio_debug_level (0-6)"), ESMF_LOGMSG_INFO)
+          return
+       end if
+    else
+       pio_debug_level = 0
+    end if
+
+    ! set PIO debug level
+    call pio_setdebuglevel(pio_debug_level)
+
+#endif
+
+    ! set cpl_scalars from config. Default to null values for standalone
+    flds_scalar_name = ''
+    flds_scalar_num = 0
+    flds_scalar_index_nx = 0
+    flds_scalar_index_ny = 0
+    flds_scalar_index_ntile = 0
+    call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldName", value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (isPresent .and. isSet) then
+       flds_scalar_name = trim(cvalue)
+       call ESMF_LogWrite(trim(subname)//' flds_scalar_name = '//trim(flds_scalar_name), ESMF_LOGMSG_INFO)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    endif
+    call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldCount", value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (isPresent .and. isSet) then
+       read(cvalue, *) flds_scalar_num
+       write(msgString,*) flds_scalar_num
+       call ESMF_LogWrite(trim(subname)//' flds_scalar_num = '//trim(msgString), ESMF_LOGMSG_INFO)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    endif
+    call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldIdxGridNX", value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (isPresent .and. isSet) then
+       read(cvalue,*) flds_scalar_index_nx
+       write(msgString,*) flds_scalar_index_nx
+       call ESMF_LogWrite(trim(subname)//' : flds_scalar_index_nx = '//trim(msgString), ESMF_LOGMSG_INFO)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    endif
+    call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldIdxGridNY", value=cvalue, isPresent=isPresent, isSet=isSet, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (isPresent .and. isSet) then
+       read(cvalue,*) flds_scalar_index_ny
+       write(msgString,*) flds_scalar_index_ny
+       call ESMF_LogWrite(trim(subname)//' : flds_scalar_index_ny = '//trim(msgString), ESMF_LOGMSG_INFO)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    endif
+    ! tile index must be present if indices for nx and ny are non-zero
+    if (flds_scalar_index_nx /= 0 .and. flds_scalar_index_ny /=0 ) then
+       call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldIdxGridNTile", isPresent=isPresent, isSet=isSet, rc=rc)
+       if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+       if (.not. isPresent .and. .not. isSet) then
+          if (mype == 0)write(*,*)'ERROR : ScalarFieldIdxGridNTile must be set'
+          call ESMF_LogWrite('ERROR : ScalarFieldIdxGridNTile must be set', ESMF_LOGMSG_ERROR)
+          rc = ESMF_FAILURE
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+       else
+          call NUOPC_CompAttributeGet(gcomp, name="ScalarFieldIdxGridNTile", value=cvalue, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          read(cvalue,*) flds_scalar_index_ntile
+          write(msgString,*) flds_scalar_index_ntile
+          call ESMF_LogWrite(trim(subname)//' : flds_scalar_index_ntile = '//trim(msgString), ESMF_LOGMSG_INFO)
+       endif
+    end if
+
+!------------------------------------------------------------------------
+! get config variables
+!
+    CF = ESMF_ConfigCreate(rc=rc)
+    call ESMF_ConfigLoadFile(config=CF ,filename='model_configure' ,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+    call ESMF_ConfigGetAttribute(config=CF,value=calendar, &
+                                 label ='calendar:', &
+                                 default='gregorian',rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+    call ESMF_ConfigGetAttribute(config=CF,value=quilting, &
+                                 label ='quilting:',rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_ConfigGetAttribute(config=CF,value=quilting_restart, &
+                                 default=.true., label ='quilting_restart:',rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (.not.quilting) quilting_restart = .false.
+
+    call ESMF_ConfigGetAttribute(config=CF,value=iau_offset,default=0,label ='iau_offset:',rc=rc)
+    if (iau_offset < 0) iau_offset=0
+
+    noutput_fh = ESMF_ConfigGetLen(config=CF, label ='output_fh:',rc=rc)
+
+    if(mype == 0) print *,'af ufs config,quilting=',quilting,' calendar=', trim(calendar),' iau_offset=',iau_offset, &
+      ' noutput_fh=',noutput_fh
+!
+    if ( quilting ) then
+      call ESMF_ConfigGetAttribute(config=CF,value=use_saved_routehandles, &
+                                   label ='use_saved_routehandles:', &
+                                   default=.false., rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_ConfigGetAttribute(config=CF,value=write_groups, &
+                                   label ='write_groups:',rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+      call ESMF_ConfigGetAttribute(config=CF,value=wrttasks_per_group_from_parent, &
+                                   label ='write_tasks_per_group:',rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      call ESMF_ConfigGetAttribute(config=CF,value=isrcTermProcessing, default=0, &
+                                   label ='isrcTermProcessing:',rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      if(mype == 0) print *,'af ufs config,quilting=',quilting,' write_groups=', &
+        write_groups,wrttasks_per_group_from_parent,' isrcTermProcessing=', isrcTermProcessing
+!
+      call ESMF_ConfigGetAttribute(config=CF,value=num_files, &
+                                   label ='num_files:',rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+      allocate(filename_base(num_files))
+      call ESMF_ConfigFindLabel(CF,'filename_base:',rc=rc)
+      do i=1,num_files
+        call ESMF_ConfigGetAttribute(config=CF,value=filename_base(i), rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      enddo
+
+      call ESMF_ConfigGetAttribute(config=CF, value=time_unlimited, label ='time_unlimited:', default=.false., rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      ! sync_fcst_info_to_wgc: flag to synchronize ESMF_Info from fcst grid comp to write grid comps. Needs ESMF update to allow this to be done with write grid component independently.
+      call ESMF_ConfigGetAttribute(config=CF, value=sync_fcst_info_to_wgc, label ='sync_fcst_info_to_wgc:', default=.false., rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    endif ! quilting
+    !
+    call ESMF_ConfigGetAttribute(config=CF, value=dt_atmos, label ='dt_atmos:',   rc=rc)
+    call ESMF_ConfigGetAttribute(config=CF, value=nfhmax,   label ='nhours_fcst:',rc=rc)
+    if(mype == 0) print *,'af ufs config,dt_atmos=',dt_atmos,'nfhmax=',nfhmax
+
+    call ESMF_TimeIntervalSet(timeStep, s=dt_atmos, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    first_kdt = 1
+    if( mype == 0) lprint = .true.
+!
+!#######################################################################
+! set up fcst grid component
+!
+!----------------------------------------------------------------------
+!*** create ufsatm tasks and quilt servers
+!-----------------------------------------------------------------------
+!
+! create fcst grid component
+
+    if( quilting ) then
+      wrttasks_per_group_from_parent = wrttasks_per_group_from_parent * num_threads
+      num_pes_fcst = petcount - write_groups * wrttasks_per_group_from_parent
+    else
+      num_pes_fcst = petcount
+    endif
+    allocate(fcstPetList(num_pes_fcst))
+    do j=1, num_pes_fcst
+      fcstPetList(j) = j - 1
+    enddo
+    fcstComp = ESMF_GridCompCreate(petList=fcstPetList, name='ufsatm_fcst', rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+    ! copy attributes from ufscap component to fcstComp
+    call ESMF_InfoGetFromHost(gcomp, info=parentInfo, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_InfoGetFromHost(fcstComp, info=childInfo, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_InfoUpdate(lhs=childInfo, rhs=parentInfo, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! use the generic SetVM method to do resource and threading control
+    call ESMF_GridCompSetVM(fcstComp, SetVM, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+    call ESMF_GridCompSetServices(fcstComp, fcstSS, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+! create fcst state
+    fcstState = ESMF_StateCreate(rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! call fcst Initialize (including creating fcstgrid and fcst fieldbundle)
+    call ESMF_GridCompInitialize(fcstComp, exportState=fcstState,    &
+                                 clock=clock, phase=1, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+!
+! reconcile the fcstComp's export state
+    call ESMF_StateReconcile(fcstState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+! determine number elements in fcstState
+    call ESMF_StateGet(fcstState, itemCount=FBCount, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if(mype == 0) print *,'ufsatm_cap: field bundles in fcstComp export state, FBCount= ',FBcount
+!
+! set start time for output
+    output_startfh = 0.
+!
+!
+!-----------------------------------------------------------------------
+!***  create and initialize Write component(s).
+!-----------------------------------------------------------------------
+!
+    if( quilting ) then
+! query the is_moving array from the fcstState (was set by fcstComp.Initialize() above)
+#ifdef FV3
+    call ESMF_InfoGetFromHost(fcstState, info=info, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_InfoGetAlloc(info, key="is_moving", values=is_moving, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    needGridTransfer = any(is_moving)
+
+    allocate(is_moving_fb(FBcount))
+    is_moving_fb = .false. ! init
+
+    write(msgString,'(A,L4)') trim(subname)//" needGridTransfer = ", needGridTransfer
+    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    write(msgString,'(A,8L4)') trim(subname)//" is_moving = ", is_moving
+    call ESMF_LogWrite(trim(msgString), ESMF_LOGMSG_INFO, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+#endif
+
+      allocate(fcstFB(FBCount), fcstItemNameList(FBCount), fcstItemTypeList(FBCount))
+      allocate(wrtComp(write_groups), wrtState(write_groups) )
+      allocate(wrtFB(FBCount,write_groups), routehandle(FBCount,write_groups))
+      allocate(srcGrid(FBCount,write_groups), dstGrid(FBCount,write_groups), gridRedistRH(FBCount,write_groups))
+      allocate(lead_wrttask(write_groups), last_wrttask(write_groups))
+      allocate(petList(wrttasks_per_group_from_parent))
+      allocate(originPetList(num_pes_fcst+wrttasks_per_group_from_parent))
+      allocate(targetPetList(num_pes_fcst+wrttasks_per_group_from_parent))
+      if(mype == 0) print *,'af allco wrtComp,write_groups=',write_groups
+
+! pull out the item names and item types from fcstState
+      call ESMF_StateGet(fcstState, itemNameList=fcstItemNameList, &
+                         itemTypeList=fcstItemTypeList, &
+                        !itemorderflag=ESMF_ITEMORDER_ADDORDER, &
+                         rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! loop over all items in the fcstState and collect all FieldBundles
+      do i=1, FBcount
+        if (fcstItemTypeList(i) == ESMF_STATEITEM_FIELDBUNDLE) then
+          ! access the FieldBundle
+          call ESMF_StateGet(fcstState, itemName=fcstItemNameList(i), &
+                             fieldbundle=fcstFB(i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!          if(mype==0.or.mype==144) print *,'af fcstFB,i=',i,'name=',trim(fcstItemNameList(i))
+        else
+        !***### anything but a FieldBundle in the state is unexpected here
+          call ESMF_LogSetError(ESMF_RC_ARG_BAD,                                 &
+                                msg="Only FieldBundles supported in fcstState.", &
+                                line=__LINE__, file=__FILE__, rcToReturn=rc)
+          return
+        endif
+        call ESMF_InfoGetFromHost(fcstFB(i), info=info, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        call ESMF_InfoGet(info, key="/NetCDF/FV3/grid_id", value=grid_id, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        call ESMF_InfoGetAlloc(info, key="/NetCDF/FV3-nooutput/frestart", values=frestart, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        is_moving_fb(i) = is_moving(grid_id)
+      enddo
+!
+      k = num_pes_fcst
+      timerhs = MPI_Wtime()
+      do i=1, write_groups
+
+! prepare petList for wrtComp(i)
+        lead_wrttask(i) = k
+        do j=1, wrttasks_per_group_from_parent
+          petList(j) = k + j-1
+        enddo
+        k = k + wrttasks_per_group_from_parent
+        last_wrttask(i) = k - 1
+        if( mype == lead_wrttask(i) ) lprint = .true.
+!        if(mype==0)print *,'af wrtComp(i)=',i,'k=',k
+
+! prepare name of the wrtComp(i)
+        write(cwrtcomp,"(A,I2.2)") "wrtComp_", i
+! create wrtComp(i)
+        wrtComp(i) = ESMF_GridCompCreate(petList=petList, name=trim(cwrtcomp), rc=rc)
+!      print *,'af wrtComp(i)=',i,'name=',trim(cwrtcomp),'rc=',rc
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! copy attributes from ufsatm_cap component to wrtComp
+        call ESMF_InfoGetFromHost(wrtComp(i), info=childInfo, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        call ESMF_InfoUpdate(lhs=childInfo, rhs=parentInfo, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! use the generic SetVM method to do resource and threading control
+        call ESMF_GridCompSetVM(wrtComp(i), SetVM, userRc=urc, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+! call into wrtComp(i) SetServices
+        call ESMF_GridCompSetServices(wrtComp(i), wrtSS, userRc=urc, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+! get the actual number of PETs executing wrtComp, considering threading
+        call ESMF_GridCompGet(gridcomp=wrtComp(i),localPet=wrtLocalPet,rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (wrtLocalPet/=-1) then
+          ! This PET does execute inside of wrtComp(i)
+          call ESMF_GridCompGet(gridcomp=wrtComp(i),petCount=wrttasks_per_group,rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        endif
+
+! add configuration file
+        call ESMF_GridCompSet(gridcomp=wrtComp(i),config=CF,rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! create wrtState(i)
+        wrtState(i) = ESMF_StateCreate(rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! add the fcst FieldBundles to the wrtState(i) so write component can
+! use this info to create mirror objects
+        call ESMF_AttributeCopy(fcstState, wrtState(i), attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_StateAdd(wrtState(i), fcstFB, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! call into wrtComp(i) Initialize
+        call ESMF_GridCompInitialize(wrtComp(i), importState=wrtState(i), clock=clock, phase=1, userRc=urc, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+! remove fcst FieldBundles from the wrtState(i) because done with it
+        call ESMF_StateRemove(wrtState(i), fcstItemNameList, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! reconcile the wrtComp(i)'s import state
+        call ESMF_StateReconcile(wrtState(i), rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if(mype==0) print *,'af wrtState reconcile, FBcount=',FBcount
+
+        call ESMF_AttributeCopy(fcstState, wrtState(i), attcopy=ESMF_ATTCOPY_REFERENCE, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+! deal with GridTransfer if needed
+
+        if (needGridTransfer) then
+
+          ! obtain wrtComp VM needed for acceptor DistGrid
+          call ESMF_GridCompGet(wrtComp(i), vm=wrtVM, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          ! loop over all FieldBundle in the states, for moving nests initiate GridTransfer
+          do j=1, FBcount
+            if (is_moving_fb(j)) then
+              ! access the fcst (provider) Grid
+              call ESMF_FieldBundleGet(fcstFB(j), grid=grid, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              ! access the mirror FieldBundle on the wrtComp
+              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fcstItemNameList(j)), fieldbundle=mirrorFB, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              ! determine whether there are fields in the mirror FieldBundle
+              call ESMF_FieldBundleGet(mirrorFB, fieldCount=fieldCount, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              if (fieldCount > 0) then
+                ! access the providerDG
+                call ESMF_GridGet(grid, distgrid=providerDG, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! construct an acceptorDG with the same number of DEs for the acceptor side
+                acceptorDG = ESMF_DistGridCreate(providerDG, vm=wrtVM, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! need a grid on the accptor side to carry the acceptorDG
+                grid = ESMF_GridEmptyCreate(vm=wrtVM, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! set the acceptorDG
+                call ESMF_GridSet(grid, distgrid=acceptorDG, vm=wrtVM, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! associate the grid with the mirror FieldBundle
+                call ESMF_FieldBundleSet(mirrorFB, grid=grid, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              endif
+            endif
+          enddo
+
+          ! Call into wrtComp(i) Initialize() phase=2 to re-balance the mirrored grid distribution on its PETs
+          call ESMF_GridCompInitialize(wrtComp(i), importState=wrtState(i), clock=clock, phase=2, userRc=urc, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ! Reconcile any changes (re-balanced grid distribution) across the wrtState(i)
+          call ESMF_StateReconcile(wrtState(i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          ! loop over all FieldBundle in the states, for moving nests handle GridTransfer
+          do j=1, FBcount
+            if (is_moving_fb(j)) then
+              ! access the fcst (provider) Grid and fieldbundle name
+              call ESMF_FieldBundleGet(fcstFB(j), grid=providerGrid, name=fb_name, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              ! access the mirror FieldBundle on the wrtComp
+              call ESMF_StateGet(wrtState(i), itemName="mirror_"//trim(fcstItemNameList(j)), fieldbundle=mirrorFB, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              ! determine whether there are fields in the mirror FieldBundle
+              call ESMF_FieldBundleGet(mirrorFB, fieldCount=fieldCount, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              if (fieldCount > 0) then
+                ! access the field in the mirror FieldBundle
+                allocate(fieldList(fieldCount))
+                call ESMF_FieldBundleGet(mirrorFB, fieldList=fieldList, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! access the balanced mirror Grid from the first Field in the mirror FieldBundle
+                call ESMF_FieldGet(fieldList(1), grid=grid, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! access the balanced mirror DistGrid from the mirror Grid
+                call ESMF_GridGet(grid, distgrid=acceptorDG, rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                ! construct a complete balanced mirror Grid with redistributed coordinates
+                call ESMF_TraceRegionEnter("ESMF_GridCreate(fromGrid,newDistGrid)", rc=rc)
+                grid = ESMF_GridCreate(providerGrid, acceptorDG, routehandle=gridRedistRH(j,i), rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                call ESMF_TraceRegionExit("ESMF_GridCreate(fromGrid,newDistGrid)", rc=rc)
+                ! keep src and dst Grids for run-loop
+                srcGrid(j,i) = providerGrid
+                dstGrid(j,i) = grid
+                ! loop over all the mirror fields and set the balanced mirror Grid
+                do ii=1, fieldCount
+                  call ESMF_InfoGetFromHost(fieldList(ii), info=info, rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  call ESMF_InfoGet(info, key="staggerloc", value=sloc, rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  staggerloc = sloc  ! convert integer into StaggerLoc_Flag
+                  call ESMF_FieldEmptySet(fieldList(ii), grid=grid, staggerloc=staggerloc, rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                enddo
+                ! clean-up
+                deallocate(fieldList)
+              endif
+            endif
+          enddo
+
+          ! Call into wrtComp(i) Initialize() phase=3 to finish up creating the mirror Fields
+          call ESMF_GridCompInitialize(wrtComp(i), importState=wrtState(i), clock=clock, phase=3, userRc=urc, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+          ! Reconcile any changes (finished mirror Fields) across the wrtState(i)
+          call ESMF_StateReconcile(wrtState(i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        endif
+
+        call ESMF_AttributeGet(wrtState(i), convention="NetCDF", purpose="FV3", &
+                               name="ngrids", value=ngrids, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_AttributeGet(wrtState(i), convention="NetCDF", purpose="FV3", &
+                               name="top_parent_is_global", value=top_parent_is_global, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        allocate(dst_field_mask(ngrids))
+
+! loop over all FieldBundle in the states and precompute Regrid operation
+        if (mype == 0) print*, 'computing regrid/redist routehandles'
+        time_rh_start = MPI_Wtime()
+        do j=1, FBcount
+          time_rh_fb_start = MPI_Wtime()
+
+          ! Destination grid mask needs to be created only for:
+          !   1) regional (non global) forecast (source) grid
+          !   2) non-moving forecast grids, moving forecast grid will be remapped in the write grid component
+          !   3) non-native grid (non cubed_sphere_grid) history bundles
+          call ESMF_AttributeGet(fcstFB(j), convention="NetCDF", purpose="FV3", name="grid_id", value=grid_id, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fcstItemNameList(j)), fieldbundle=wrtFB(j,i), rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+
+          call ESMF_AttributeGet(wrtFB(j,i), convention="NetCDF", purpose="FV3-nooutput", &
+                                 name="output_grid", value=output_grid, isPresent=isPresent, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          needs_dst_mask = .TRUE.
+          needs_dst_mask = needs_dst_mask .AND. .not. (grid_id == 1 .and. top_parent_is_global)      ! 1) regional (non global) forecast (source) grid
+          needs_dst_mask = needs_dst_mask .AND. .not. is_moving_fb(j)    ! 2) non-moving forecast grids
+          needs_dst_mask = needs_dst_mask .AND. .not. (trim(output_grid) == "restart_grid" .or. trim(output_grid) == "cubed_sphere_grid") ! 3) non-native grid (non cubed_sphere_grid) history bundles
+
+          if (mype == 0) then
+            write(*,'(A,I2,1X,A32, A,I2, A,A24, A,L2, A,L2 )') ' FB: ',j, fcstItemNameList(j), &
+                           ' grid_id ', grid_id, &
+                           ' output_grid: ', output_grid, &
+                           ' is_moving: ', is_moving_fb(j), &
+                           ' needs_dst_mask: ', needs_dst_mask
+          endif
+
+          ! only on write group 1, RH's on groups > 1 are computed from RH on group 1
+          if (needs_dst_mask .and. i==1) then
+
+            call ESMF_StateGet(wrtState(i), itemName="output_"//trim(fcstItemNameList(j)), fieldbundle=wrtFB(j,i), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            call ESMF_FieldBundleGet(wrtFB(j,i), grid=dst_grid, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            if (.not. ESMF_FieldIsCreated(dst_field_mask(grid_id))) then
+              if (mype == 0) print *, '       generate destination mask for grid ', grid_id
+              call ESMF_FieldBundleGet(fcstFB(j), grid=src_grid, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+              call generate_dst_field_mask(src_grid, dst_grid, dst_field_mask(grid_id), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            else
+              if (mype == 0) print *, '       use already generated destination mask for grid ', grid_id
+            endif
+
+            call add_dst_mask(dst_grid, dst_field_mask(grid_id), dstOutsideMaskValue, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          end if ! .not. is_moving_fb(j)
+
+          ! decide between Redist() and Regrid()
+          if (is_moving_fb(j)) then
+            ! this is a moving domain -> use a static Redist() to move data to wrtComp(:)
+            ! access the mirror FieldBundle in the wrtState(i)
+            call ESMF_StateGet(wrtState(i), &
+                               itemName="mirror_"//trim(fcstItemNameList(j)), &
+                               fieldbundle=wrtFB(j,i), rc=rc)
+            if (i==1) then
+              ! this is a Store() for the first wrtComp -> must do the Store()
+              call ESMF_TraceRegionEnter("ESMF_FieldBundleRedistStore()", rc=rc)
+              call ESMF_FieldBundleRedistStore(fcstFB(j), wrtFB(j,1), &
+                                               routehandle=routehandle(j,1), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_TraceRegionExit("ESMF_FieldBundleRedistStore()", rc=rc)
+              originPetList(1:num_pes_fcst)  = fcstPetList(:)
+              originPetList(num_pes_fcst+1:) = petList(:)
+            else
+              targetPetList(1:num_pes_fcst)  = fcstPetList(:)
+              targetPetList(num_pes_fcst+1:) = petList(:)
+              call ESMF_TraceRegionEnter("ESMF_RouteHandleCreate() in lieu of ESMF_FieldBundleRedistStore()", rc=rc)
+              routehandle(j,i) = ESMF_RouteHandleCreate(routehandle(j,1), &
+                                                        originPetList=originPetList, &
+                                                        targetPetList=targetPetList, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_TraceRegionExit("ESMF_RouteHandleCreate() in lieu of ESMF_FieldBundleRedistStore()", rc=rc)
+            endif
+          else
+            ! this is a static domain -> do Regrid() "on the fly" when sending data to wrtComp(:)
+            ! access the output FieldBundle in the wrtState(i)
+            call ESMF_StateGet(wrtState(i), &
+                               itemName="output_"//trim(fcstItemNameList(j)), &
+                               fieldbundle=wrtFB(j,i), rc=rc)
+            ! if(mype == 0) print *,'af get wrtfb=',"output_"//trim(fcstItemNameList(j)),' rc=',rc
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            call ESMF_AttributeGet(wrtFB(j,i), convention="NetCDF", purpose="FV3-nooutput", &
+                                   name="output_grid", value=output_grid, isPresent=isPresent, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+            fieldbundle_uses_redist = .false.
+            if (trim(output_grid) == "restart_grid" .or. trim(output_grid) == "cubed_sphere_grid") then
+              ! restart output forecast bundles, or history cubed_sphere (native) grid; no need to set regridmethod
+              ! Redist will be used instead of Regrid
+              fieldbundle_uses_redist = .true.
+            else
+              ! history output forecast bundles
+              ! determine regridmethod
+              if (index(fcstItemNameList(j),"_bilinear") >0 )  then
+                regridmethod = ESMF_REGRIDMETHOD_BILINEAR
+              else if (index(fcstItemNameList(j),"_patch") >0)  then
+                regridmethod = ESMF_REGRIDMETHOD_PATCH
+              else if (index(fcstItemNameList(j),"_nearest_stod") >0) then
+                regridmethod = ESMF_REGRIDMETHOD_NEAREST_STOD
+              else if (index(fcstItemNameList(j),"_nearest_dtos") >0) then
+                regridmethod = ESMF_REGRIDMETHOD_NEAREST_DTOS
+              else if (index(fcstItemNameList(j),"_conserve") >0) then
+                regridmethod = ESMF_REGRIDMETHOD_CONSERVE
+              else
+                call ESMF_LogSetError(ESMF_RC_ARG_BAD, &
+                                      msg="Unable to determine regrid method.", &
+                                      line=__LINE__, file=__FILE__, rcToReturn=rc)
+                return
+              endif
+            endif
+
+            write(msgString,"(A,I2.2,',',I2.2,A)") "RH creation for wrtFB(",j,i, ") ...."//trim(fcstItemNameList(j))
+            call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+            if (i==1) then
+              write(rh_filename,'(A,I2.2)') 'routehandle_fb', j
+
+              inquire(FILE=trim(rh_filename), EXIST=rh_file_exist)
+
+              if (rh_file_exist .and. use_saved_routehandles) then
+                if(mype==0) print *,'in ufsatm_cap init, routehandle file ',trim(rh_filename), ' exists'
+
+                write(msgString,*) "Calling into ESMF_RouteHandleCreate(from file)...", trim(rh_filename)
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                call ESMF_TraceRegionEnter("ESMF_RouteHandleCreate(from file)", rc=rc)
+                routehandle(j,1) = ESMF_RouteHandleCreate(fileName=trim(rh_filename), rc=rc)
+                if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                call ESMF_TraceRegionExit("ESMF_RouteHandleCreate(from file)", rc=rc)
+
+                write(msgString,*) "... returned from ESMF_RouteHandleCreate(from file)."
+                call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+              else
+                ! this is a Store() for the first wrtComp -> must do the Store()
+                if (fieldbundle_uses_redist) then
+
+                  write(msgString,*) "Calling into FieldBundleRedistStore..."
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                  call ESMF_TraceRegionEnter("ESMF_FieldBundleRedistStore()", rc=rc)
+                  call ESMF_FieldBundleRedistStore(fcstFB(j), wrtFB(j,1), &
+                                                   routehandle=routehandle(j,1), &
+                                                   rc=rc)
+                  if (rc /= ESMF_SUCCESS) then
+                    call ESMF_LogWrite('ufsatm_cap.F90:InitializeAdvertise error in ESMF_FieldBundleRedistStore', ESMF_LOGMSG_ERROR, rc=rc)
+                    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                    ! call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                  endif
+                  call ESMF_TraceRegionExit("ESMF_FieldBundleRedistStore()", rc=rc)
+
+                  write(msgString,*) "... returned from FieldBundleRedistStore."
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                else
+
+                  write(msgString,*) "Calling into FieldBundleRegridStore..."
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                  call ESMF_TraceRegionEnter("ESMF_FieldBundleRegridStore()", rc=rc)
+                  call ESMF_FieldBundleRegridStore(fcstFB(j), wrtFB(j,1), &
+                                                   dstMaskValues=(/dstOutsideMaskValue/), &
+                                                   regridMethod=regridmethod, routehandle=routehandle(j,1), &
+                                                   unmappedaction=ESMF_UNMAPPEDACTION_IGNORE, &
+                                                   srcTermProcessing=isrcTermProcessing, rc=rc)
+                  if (rc /= ESMF_SUCCESS) then
+                    call ESMF_LogWrite('ufsatm_cap.F90:InitializeAdvertise error in ESMF_FieldBundleRegridStore', ESMF_LOGMSG_ERROR, rc=rc)
+                    call ESMF_Finalize(endflag=ESMF_END_ABORT)
+                  endif
+                  call ESMF_TraceRegionExit("ESMF_FieldBundleRegridStore()", rc=rc)
+
+                  write(msgString,*) "... returned from FieldBundleRegridStore."
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                endif
+
+                if (use_saved_routehandles) then
+
+                  write(msgString,*) "Calling into ESMF_RouteHandleWrite...", trim(rh_filename)
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                  call ESMF_TraceRegionEnter("ESMF_RouteHandleWrite()", rc=rc)
+                  call ESMF_RouteHandleWrite(routehandle(j,1), fileName=trim(rh_filename), rc=rc)
+                  if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+                  call ESMF_TraceRegionExit("ESMF_RouteHandleWrite()", rc=rc)
+                  if(mype==0) print *,'in ufsatm_cap init, saved routehandle file ',trim(rh_filename)
+
+                  write(msgString,*) "... returned from ESMF_RouteHandleWrite."
+                  call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+                endif
+
+              endif
+
+              originPetList(1:num_pes_fcst)  = fcstPetList(:)
+              originPetList(num_pes_fcst+1:) = petList(:)
+
+            else
+              targetPetList(1:num_pes_fcst)  = fcstPetList(:)
+              targetPetList(num_pes_fcst+1:) = petList(:)
+
+              write(msgString,*) "Calling into ESMF_RouteHandleCreate(from RH)..."
+              call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+              call ESMF_TraceRegionEnter("ESMF_RouteHandleCreate(from RH) in lieu of ESMF_FieldBundleRegridStore()", rc=rc)
+              routehandle(j,i) = ESMF_RouteHandleCreate(routehandle(j,1), &
+                                                        originPetList=originPetList, &
+                                                        targetPetList=targetPetList, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_TraceRegionExit("ESMF_RouteHandleCreate(from RH) in lieu of ESMF_FieldBundleRegridStore()", rc=rc)
+
+              write(msgString,*) "... returned from ESMF_RouteHandleCreate(from RH)."
+              call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+
+            endif
+            write(msgString,"(A,I2.2,',',I2.2,A)") "... returned from RH creation for wrtFB(",j,i, ")."
+            call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO, rc=rc)
+          endif
+
+          if (mype == 0) write(*,'(A,I2,F12.6)') '        done computing routehandle for field bundle: ',j,MPI_Wtime()-time_rh_fb_start
+        enddo  ! j=1, FBcount
+        if (mype == 0) write(*,'(A,F12.6)') ' done computing all routehandles: ',MPI_Wtime()-time_rh_start
+
+        if (allocated(dst_field_mask)) then
+          do ii=1,ngrids
+            if (ESMF_FieldIsCreated(dst_field_mask(ii))) then
+              call ESMF_FieldDestroy(dst_field_mask(ii), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            endif
+          end do
+          deallocate(dst_field_mask)
+        endif
+
+! end write_groups
+      enddo   ! i=1, write_groups
+      if(mype==0) print *,'in ufsatm_cap init, time wrtcrt/regrdst',MPI_Wtime()-timerhs
+      deallocate(petList)
+      deallocate(originPetList)
+      deallocate(targetPetList)
+!
+!---------------------------------------------------------------------------------
+!---  set up output forecast time array
+!
+!--- get current forecast length
+      if(iau_offset > 0) then
+        output_startfh = iau_offset
+      endif
+      if(mype==0) print *,'in ufsatm cap init, output_startfh=',output_startfh,' iau_offset=',iau_offset
+!
+!-----------------------------------------------------------------------
+!***  SET THE FIRST WRITE GROUP AS THE FIRST ONE TO ACT.
+!-----------------------------------------------------------------------
+!
+      n_group = 1
+!
+!end quilting
+    endif
+!
+!-- set up output forecast time if output_fh is specified
+    if (noutput_fh > 0 ) then
+!--- use output_fh to sepcify output forecast time
+      loutput_fh = .true.
+      lflname_fulltime = .false.
+      if(noutput_fh == 1) then
+        call ESMF_ConfigGetAttribute(CF,value=outputfh,label='output_fh:', rc=rc)
+        if(outputfh == -1) loutput_fh = .false.
+      endif
+      if( loutput_fh ) then
+        lfreq = .false.
+        if( allocated(output_fh)) deallocate(output_fh)
+        if(noutput_fh == 2) then
+          call ESMF_ConfigGetAttribute(CF,valueList=outputfh2,label='output_fh:', &
+             count=noutput_fh, rc=rc)
+          if(outputfh2(2) == -1) then
+            !--- output_fh is output frequency, the second item is -1
+            lfreq = .true.
+            call OutputHours_FrequencyInput(nfhmax, output_startfh, outputfh2)
+          endif
+        endif
+        if( noutput_fh /= 2 .or. .not. lfreq ) then
+          allocate(output_fh(noutput_fh))
+          output_fh = 0
+          call ESMF_ConfigGetAttribute(CF,valueList=output_fh,label='output_fh:', &
+             count=noutput_fh, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          call OutputHours_ArrayInput(noutput_fh,output_startfh)
+        endif
+      endif ! end loutput_fh
+    endif
+    if(mype==0) print *,'output_fh=',output_fh(1:size(output_fh)),'lflname_fulltime=',lflname_fulltime
+    if ( quilting ) then
+      do i=1, write_groups
+        call ESMF_InfoGetFromHost(wrtState(i), info=info, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        call ESMF_InfoSet(info, key="output_fh", values=output_fh, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      enddo
+    endif
+
+    ! --- advertise Fields in importState and exportState -------------------
+
+! call fcst Initialize (advertise phase)
+    call ESMF_GridCompInitialize(fcstComp, importState=importState, exportState=exportState, &
+                                 clock=clock, phase=2, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+    call ESMF_ConfigDestroy(cf, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap, init time=',MPI_Wtime()-timeis,mype
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "InitializeAdvertise", "E")
+#endif
+!-----------------------------------------------------------------------
+!
+  end subroutine InitializeAdvertise
+
+!-----------------------------------------------------------------------------
+  !> This will calculate output hours if the user has stated a
+  !> an fhzero frequency.
+  !>
+  !> @param[inout] nfhmax maximum number of forecast hours
+  !> @param[inout] output_startfh ouptut start time
+  !> @param[inout] outputfh2 user defined forecast hour configuration
+  !>
+  !> @author Daniel Sarmiento @date May 16, 2025
+  subroutine OutputHours_FrequencyInput(nfhmax, output_startfh, outputfh2)
+    integer                   :: nfh, i
+    real, intent(inout)       :: nfhmax, output_startfh, outputfh2(2)
+
+    nfh = 0
+    if( nfhmax>output_startfh) nfh = nint((nfhmax-output_startfh)/outputfh2(1)) + 1
+    if( nfh > 0) then
+      allocate(output_fh(nfh))
+      output_fh(1) = output_startfh + dt_atmos/3600.
+      do i=2,nfh
+        output_fh(i) = (i-1)*outputfh2(1) + output_startfh
+        ! Except fh000, which is the first time output, if any other of the
+        ! output time is not integer hour, set lflname_fulltime to be true, so the
+        ! history file names will contain the full time stamp (HHH-MM-SS).
+        if(.not.lflname_fulltime) then
+          if(mod(nint(output_fh(i)*3600.),3600) /= 0) lflname_fulltime = .true.
+        endif
+      enddo
+    endif
+  end subroutine OutputHours_FrequencyInput
+
+  !> This will calculate output hours if the user has stated a
+  !> an array of desired output hours.
+  !>
+  !> @param[inout] noutput_fh index of output hours array
+  !> @param[inout] output_startfh ouptut start time
+  !>
+  !> @author Daniel Sarmiento @date May 16, 2025
+  subroutine OutputHours_ArrayInput(noutput_fh,output_startfh)
+
+    integer                   :: ist, i
+    integer, intent(inout)    :: noutput_fh
+    real, intent(inout)       :: output_startfh
+    
+    if( output_startfh == 0) then
+      ! If the output time in output_fh array contains first time stamp output,
+      ! check the rest of output time, otherwise, check all the output time.
+      ! If any of them is not integer hour, the history file names will
+      ! contain the full time stamp (HHH-MM-SS)
+      ist = 1
+      if(output_fh(1)==0) then
+        output_fh(1) = dt_atmos/3600.
+        ist= 2
+      endif
+      do i=ist,noutput_fh
+        if(.not.lflname_fulltime) then
+          if(mod(nint(output_fh(i)*3600.),3600) /= 0) lflname_fulltime = .true.
+        endif
+      enddo
+    else
+      do i=1,noutput_fh
+        output_fh(i) = output_startfh + output_fh(i)
+        ! When output_startfh >0, check all the output time, if any of
+        ! them is not integer hour, set lflname_fulltime to be true. The
+        ! history file names will contain the full time stamp (HHH-MM-SS).
+        if(.not.lflname_fulltime) then
+          if(mod(nint(output_fh(i)*3600.),3600) /= 0) lflname_fulltime = .true.
+        endif
+      enddo
+    endif
+
+  end subroutine OutputHours_ArrayInput
+
+  subroutine InitializeRealize(gcomp, rc)
+    use mpi_f08, only : MPI_Wtime
+
+    type(ESMF_GridComp)  :: gcomp
+    integer, intent(out) :: rc
+
+    ! local variables
+    character(len=*),parameter :: subname='(ufsatm_cap:InitializeRealize)'
+    type(ESMF_Clock)           :: clock
+    type(ESMF_State)           :: importState, exportState
+    integer                    :: urc
+
+    real(8)                   :: timeirs
+
+    rc = ESMF_SUCCESS
+    timeirs = MPI_Wtime()
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "InitializeRealize", "B")
+#endif
+
+    ! query for importState and exportState
+    call NUOPC_ModelGet(gcomp, driverClock=clock, importState=importState, exportState=exportState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! --- conditionally realize or remove Fields in importState and exportState -------------------
+
+    ! call fcst Initialize (realize phase)
+    call ESMF_GridCompInitialize(fcstComp, importState=importState, exportState=exportState, &
+                                 clock=clock, phase=3, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+    timere = 0.
+    timep2re = 0.
+
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap, initirealz time=',MPI_Wtime()-timeirs,mype
+#ifdef UFS_TRACING
+    if (mype == 0)  call ufs_trace("fv3", "InitializeRealize", "E")
+#endif
+
+  end subroutine InitializeRealize
+
+!-----------------------------------------------------------------------------
+
+  subroutine ModelAdvance(gcomp, rc)
+
+    use mpi_f08, only : MPI_Wtime
+
+    type(ESMF_GridComp)         :: gcomp
+    integer, intent(out)        :: rc
+    real(kind=8)                :: timers
+
+!-----------------------------------------------------------------------------
+
+    rc = ESMF_SUCCESS
+    timers = MPI_Wtime()
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance", "B")
+#endif
+    if(write_runtimelog .and. timere>0. .and. lprint) print *,'in ufsatm_cap, time between atmosphere run step=', timers-timere,mype
+
+    if (profile_memory) call ESMF_VMLogMemInfo("Entering UFSATM ModelAdvance: ")
+
+    call ModelAdvance_phase1(gcomp, rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ModelAdvance_phase2(gcomp, rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    if (profile_memory) call ESMF_VMLogMemInfo("Leaving UFSATM ModelAdvance: ")
+
+    timere = MPI_Wtime()
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap, time in atmosphere run step=', timere-timers, mype
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance", "E")
+#endif
+
+  end subroutine ModelAdvance
+
+!-----------------------------------------------------------------------------
+
+  subroutine ModelAdvance_phase1(gcomp, rc)
+    use mpi_f08, only : MPI_Wtime
+
+    type(ESMF_GridComp)         :: gcomp
+    integer, intent(out)        :: rc
+
+    ! local variables
+    type(ESMF_Clock)            :: clock
+    integer                     :: urc
+    logical                     :: fcstpe
+    character(len=*),parameter  :: subname='(ufsatm_cap:ModelAdvance_phase1)'
+    character(240)              :: msgString
+    real(kind=8)                :: timep1rs, timep1re
+
+!-----------------------------------------------------------------------------
+
+    rc = ESMF_SUCCESS
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance_phase1", "B")
+#endif
+
+    timep1rs = MPI_Wtime()
+    if(write_runtimelog .and. timep2re>0. .and. lprint) print *,'in ufsatm_cap, time between ufsatm run phase2 and phase1 ', timep1rs-timep2re,mype
+
+    if(profile_memory) call ESMF_VMLogMemInfo("Entering UFSATM ModelAdvance_phase1: ")
+
+    call ESMF_GridCompGet(gcomp, clock=clock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_ClockPrint(clock, options="currTime", &
+                         preString="entering UFSATM_ADVANCE phase1 with clock current: ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+    call ESMF_ClockPrint(clock, options="startTime", &
+                         preString="entering UFSATM_ADVANCE phase1 with clock start:   ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+    call ESMF_ClockPrint(clock, options="stopTime", &
+                         preString="entering UFSATM_ADVANCE phase1 with clock stop:    ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+
+    call ESMF_GridCompRun(fcstComp, exportState=fcstState, clock=clock, phase=1, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+    if( dbug > 0 .or. cplprint_flag ) then
+         fcstpe = .false.
+         if( mype < num_pes_fcst ) fcstpe = .true.
+         call diagnose_cplFields(gcomp, clock, fcstpe, cplprint_flag, dbug, 'import', rc=rc)
+         if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    endif
+
+    timep1re = MPI_Wtime()
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap,modeladvance phase1 time ', timep1re-timep1rs,mype
+    if (profile_memory) call ESMF_VMLogMemInfo("Leaving UFSATM ModelAdvance_phase1: ")
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance_phase1", "E")
+#endif
+
+  end subroutine ModelAdvance_phase1
+
+!-----------------------------------------------------------------------------
+
+  subroutine ModelAdvance_phase2(gcomp, rc)
+    use mpi_f08, only : MPI_Wtime
+
+    type(ESMF_GridComp)         :: gcomp
+    integer, intent(out)        :: rc
+
+    ! local variables
+    type(ESMF_Time)             :: currTime
+    type(ESMF_TimeInterval)     :: timeStep
+    type(ESMF_Time)             :: startTime
+    type(ESMF_TimeInterval)     :: time_elapsed
+
+    integer                     :: na, j, urc
+    integer                     :: nfseconds
+    logical                     :: fcstpe
+    character(len=*),parameter  :: subname='(ufsatm_cap:ModelAdvance_phase2)'
+
+    character(240)              :: msgString
+
+    type(ESMF_Clock)            :: clock, clock_out
+    integer                     :: fieldCount
+
+    real(kind=8)                :: timep2rs
+
+    character(len=ESMF_MAXSTR)  :: fb_name
+    type(ESMF_Info)             :: info
+!-----------------------------------------------------------------------------
+
+    rc = ESMF_SUCCESS
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance_phase2", "B")
+#endif
+    timep2rs = MPI_Wtime()
+
+    if(profile_memory) call ESMF_VMLogMemInfo("Entering UFSATM ModelAdvance_phase2: ")
+
+    call ESMF_GridCompGet(gcomp, clock=clock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_GridCompRun(fcstComp, exportState=fcstState, clock=clock, phase=2, userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+    clock_out = ESMF_ClockCreate(clock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_ClockAdvance(clock_out, rc = RC)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+!-------------------------------------------------------------------------------
+!*** if it is output time, call data transfer and write grid comp run
+    if( quilting ) then
+
+      call ESMF_ClockGet(clock_out, startTime=startTime, currTime=currTime, &
+                         timeStep=timeStep, rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+      time_elapsed  = currTime - startTime
+      na = nint(time_elapsed/timeStep)
+      call ESMF_TimeIntervalGet(time_elapsed, s=nfseconds, rc=rc)
+
+      output: if (ANY(nint(output_fh(:)*3600.0) == nfseconds) .or. ANY(frestart(:) == nfseconds)) then
+
+        if (mype == 0 .or. mype == lead_wrttask(1)) print *,' aft fcst run output time=',nfseconds, &
+          'FBcount=',FBcount,'na=',na
+
+        call ESMF_TraceRegionEnter("ESMF_VMEpoch:fcstFB->wrtFB", rc=rc)
+
+        call ESMF_VMEpochEnter(epoch=ESMF_VMEpoch_Buffer, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        do j=1, FBCount
+
+          if (is_moving_fb(j)) then
+            ! Grid coords need to be redistributed to the mirror Grid on wrtComp
+            call ESMF_GridRedist(srcGrid(j, n_group), dstGrid(j, n_group), routehandle=gridRedistRH(j, n_group), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          endif
+
+          ! execute the routehandle from fcstFB -> wrtFB (either Regrid() or Redist()), only if there are fields in the bundle
+          call ESMF_FieldBundleGet(fcstFB(j), fieldCount=fieldCount, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+          if (fieldCount > 0) then
+            call ESMF_FieldBundleSMM(fcstFB(j), wrtFB(j,n_group),         &
+                                     routehandle=routehandle(j, n_group), &
+                                     zeroregionflag=(/ESMF_REGION_SELECT/), &
+                                     termorderflag=(/ESMF_TERMORDER_SRCSEQ/), rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          end if
+
+        enddo
+
+        call ESMF_VMEpochExit(rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_TraceRegionExit("ESMF_VMEpoch:fcstFB->wrtFB", rc=rc)
+
+        if (sync_fcst_info_to_wgc) then
+          do j=1, FBCount
+
+            ! Update fcstFB attributes from fcst PEs to all PEs in this VM
+            ! This is needed in case some attributes are updated during run time
+            call ESMF_FieldBundleGet(fcstFB(j), name=fb_name, rc=rc)
+            if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            if (fb_name(1:8) /= "restart_") then
+              call ESMF_InfoGetFromHost(fcstFB(j), info=info, rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+              call ESMF_InfoBroadcast(info, rootPet=fcstPetList(1), rc=rc)
+              if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+            endif
+
+          enddo
+        end if
+
+        call ESMF_LogWrite('Model Advance: before wrtcomp run ', ESMF_LOGMSG_INFO, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        call ESMF_GridCompRun(wrtComp(n_group), importState=wrtState(n_group), clock=clock_out, userRc=urc, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+
+        call ESMF_LogWrite('Model Advance: after wrtcomp run ', ESMF_LOGMSG_INFO, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (n_group == write_groups) then
+          n_group = 1
+        else
+          n_group = n_group + 1
+        endif
+
+      endif output
+
+    endif ! quilting
+
+    call ESMF_ClockPrint(clock, options="currTime", &
+                         preString="leaving UFSATM_ADVANCE phase2 with clock current: ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+    call ESMF_ClockPrint(clock, options="startTime", &
+                         preString="leaving UFSATM_ADVANCE phase2 with clock start:   ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+    call ESMF_ClockPrint(clock, options="stopTime", &
+                         preString="leaving UFSATM_ADVANCE phase2 with clock stop:    ", &
+                         unit=msgString)
+    call ESMF_LogWrite(msgString, ESMF_LOGMSG_INFO)
+
+    if( dbug > 0 .or. cplprint_flag ) then
+      fcstpe = .false.
+      if( mype < num_pes_fcst ) fcstpe = .true.
+      call diagnose_cplFields(gcomp, clock_out, fcstpe, cplprint_flag, dbug, 'export', rc=rc)
+      if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    end if
+
+    call ESMF_ClockDestroy(clock_out, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    timep2re = MPI_Wtime()
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap,modeladvance phase2 time ', timep2re-timep2rs, mype
+    if(profile_memory) call ESMF_VMLogMemInfo("Leaving UFSATM ModelAdvance_phase2: ")
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelAdvance_phase2", "E")
+#endif
+
+  end subroutine ModelAdvance_phase2
+
+!-----------------------------------------------------------------------------
+
+  subroutine ModelSetRunClock(gcomp, rc)
+
+    type(ESMF_GridComp)         :: gcomp
+    integer, intent(out)        :: rc
+
+    ! local variables
+    type(ESMF_Clock)            :: dclock, mclock
+    type(ESMF_TimeInterval)     :: dtimestep, mtimestep
+    type(ESMF_Time)             :: mcurrtime, mstoptime
+    integer :: dtime, ifout
+
+!-----------------------------------------------------------------------------
+
+    rc = ESMF_SUCCESS
+
+    call NUOPC_ModelGet(gcomp, driverClock=dclock, modelClock=mclock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_ClockGet(dclock, timeStep=dtimestep, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_ClockGet(mclock, currTime=mcurrtime, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    call ESMF_TimeIntervalSet(mtimestep,s=dt_atmos,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    mstoptime = mcurrtime + dtimestep
+
+    call ESMF_ClockSet(mclock, timeStep=mtimestep, stopTime=mstoptime, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+#ifdef MPAS
+    ! Setup MPAS output stream times.
+    call ESMF_TimeIntervalGet( dtimestep, s=dtime, rc=rc )
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call init_is_restart_fh(mcurrTime, dtime, .false., outputfh_info, key='output_fh')
+    allocate(mpas_output_times(size(outputfh_info%restartFhTimes)))
+    do ifout =1,size(outputfh_info%restartFhTimes)
+       mpas_output_times(ifout)%t = outputfh_info%restartFhTimes(ifout)
+    end do
+
+    ! Setup MPAS history stream times.
+    call ESMF_TimeIntervalGet( dtimestep, s=dtime, rc=rc )
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call init_is_restart_fh(mcurrTime, dtime, .false., restartfh_info)
+    allocate(mpas_restart_times(size(restartfh_info%restartFhTimes)))
+    do ifout =1,size(restartfh_info%restartFhTimes)
+       mpas_restart_times(ifout)%t = restartfh_info%restartFhTimes(ifout)
+    end do
+
+    ! Setup MPAS diagnostic stream times.
+    ! NOT YET IMPLEMENTED
+    ! This will default to being the same as the output stream.
+
+    ! Setup MPAS da stream times.
+    ! NOT YET IMPLEMENTED
+#endif
+  end subroutine ModelSetRunClock
+
+!-----------------------------------------------------------------------------
+
+  subroutine ufsatm_checkimport(gcomp, rc)
+
+!***  Check the import state fields
+
+    ! input arguments
+    type(ESMF_GridComp)        :: gcomp
+    integer, intent(out)       :: rc
+
+    ! local variables
+    character(len=*),parameter :: subname='(ufsatmatm_cap:ufsatm_checkimport)'
+    integer                    :: n, nf
+    type(ESMF_Clock)           :: clock
+    type(ESMF_Time)            :: currTime, invalidTime
+    type(ESMF_State)           :: importState
+    logical                    :: isValid
+    type(ESMF_Field),pointer   :: fieldList(:)
+    character(len=128)         :: fldname
+    character(esmf_maxstr)     :: msgString
+    integer                    :: date(6)
+
+    rc = ESMF_SUCCESS
+
+    ! query the Component for its clock
+    call ESMF_GridCompGet(gcomp, clock=clock, importState=importState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! get the current time out of the clock
+    call ESMF_ClockGet(clock, currTime=currTime, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    date(1:6) = 0
+    call ESMF_TimeGet(time=currTime,yy=date(1),mm=date(2),dd=date(3),h=date(4), &
+                      m=date(5),s=date(6),rc=rc)
+!   if(mype==0) print *,'in ufsatm_checkimport, currtime=',date(1:6)
+
+    ! set up invalid time (by convention)
+    call ESMF_TimeSet(invalidTime, yy=99999999, mm=01, dd=01, &
+                      h=00, m=00, s=00, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    nullify(fieldList)
+    call NUOPC_GetStateMemberLists(importState, fieldList=fieldList, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! set the importFieldsValid flag
+    ! associated(fieldList) will be false if there are no fields
+
+    importFieldsValid(:) = .true.
+    if (associated(fieldList)) then
+!     if(mype==0) print *,'in ufsatm_checkimport, inside associated(fieldList)'
+      do n = 1,size(fieldList)
+        call ESMF_FieldGet(fieldList(n), name=fldname, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        ! check if import field carries a valid timestamp
+        call NUOPC_GetTimestamp(fieldList(n), isValid=isValid, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+        if (isValid) then
+          ! if timestamp is set, check if it is valid
+          isValid = .not.NUOPC_IsAtTime(fieldList(n), invalidTime, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        end if
+
+        ! store field status in internal array
+        nf = queryImportFields(fldname)
+        importFieldsValid(nf) = isValid
+
+        if (isValid) then
+          ! check if field is current
+          isValid = NUOPC_IsAtTime(fieldList(n), currTime, rc=rc)
+          if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+          if (.not.isValid) then
+            call ESMF_LogSetError(ESMF_RC_ARG_BAD, &
+                                  msg="NUOPC INCOMPATIBILITY DETECTED: Import Field " &
+                                      // trim(fldname) // " not at current time", &
+                                  line=__LINE__, file=__FILE__, rcToReturn=rc)
+            return
+          end if
+        end if
+        write(msgString,'(A,2i4,l3)') "ufsatm_checkimport "//trim(fldname),n,nf,importFieldsValid(nf)
+        call ESMF_LogWrite(msgString,ESMF_LOGMSG_INFO,rc=rc)
+      enddo
+
+      deallocate(fieldList)
+    endif
+
+  end subroutine ufsatm_checkimport
+
+!-----------------------------------------------------------------------------
+
+  subroutine TimestampExport_phase1(gcomp, rc)
+
+    ! input arguments
+    type(ESMF_GridComp)        :: gcomp
+    integer, intent(out)       :: rc
+
+    ! local variables
+    character(len=*),parameter :: subname='(ufsatm_cap:TimestampExport_phase1)'
+    type(ESMF_Clock)           :: driverClock, modelClock
+    type(ESMF_State)           :: exportState
+
+    rc = ESMF_SUCCESS
+
+    ! get driver and model clock
+    call NUOPC_ModelGet(gcomp, driverClock=driverClock, &
+                        modelClock=modelClock, exportState=exportState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! reset model clock to initial time
+    call NUOPC_CheckSetClock(modelClock, driverClock, forceCurrTime=.true., rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+    ! update timestamp on export Fields
+    call NUOPC_SetTimestamp(exportState, modelClock, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+
+  end subroutine TimestampExport_phase1
+
+!-----------------------------------------------------------------------------
+
+  subroutine ModelFinalize(gcomp, rc)
+    use mpi_f08, only : MPI_Wtime
+
+    ! input arguments
+    type(ESMF_GridComp)        :: gcomp
+    integer, intent(out)       :: rc
+
+    ! local variables
+    character(len=*),parameter :: subname='(ufsatm_cap:ModelFinalize)'
+    integer                    :: i, urc
+    type(ESMF_VM)              :: vm
+    real(kind=8)               :: timeffs
+!
+!-----------------------------------------------------------------------------
+!*** finialize forecast
+
+    rc = ESMF_SUCCESS
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelFinalize", "B")
+#endif
+    timeffs = MPI_Wtime()
+!
+    call ESMF_GridCompGet(gcomp,vm=vm,rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_VMBarrier(vm=vm, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+!*** finalize grid comps
+    if( quilting ) then
+      do i = 1, write_groups
+        call ESMF_GridCompFinalize(wrtComp(i), importState=wrtState(i),userRc=urc, rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+      enddo
+    endif
+
+    call ESMF_GridCompFinalize(fcstComp, exportState=fcststate,userRc=urc, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc,  msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    if (ESMF_LogFoundError(rcToCheck=urc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__, rcToReturn=rc)) return
+!
+!*** destroy grid comps
+    if( quilting ) then
+      do i = 1, write_groups
+        call ESMF_StateDestroy(wrtState(i), rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+        call ESMF_GridCompDestroy(wrtComp(i), rc=rc)
+        if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+      enddo
+    endif
+
+    call ESMF_StateDestroy(fcstState, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+    call ESMF_GridCompDestroy(fcstComp, rc=rc)
+    if (ESMF_LogFoundError(rcToCheck=rc, msg=ESMF_LOGERR_PASSTHRU, line=__LINE__, file=__FILE__)) return
+!
+    if(write_runtimelog .and. lprint) print *,'in ufsatm_cap, finalize time=',MPI_Wtime()-timeffs, mype
+#ifdef UFS_TRACING
+    if (mype == 0) call ufs_trace("fv3", "ModelFinalize", "E")
+#endif
+
+  end subroutine ModelFinalize
+!
+!-----------------------------------------------------------------------------
+
+end module ufsatm_cap_mod
