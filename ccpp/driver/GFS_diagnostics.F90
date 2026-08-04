@@ -4232,7 +4232,7 @@ module GFS_diagnostics
         ! ISCCP mean cloud albedo
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'MEANCLDALB_ISCCP'
+        ExtDiag(idx)%name = 'MEANCLDALB_ISCCP'
         ExtDiag(idx)%desc = 'ISCCP mean cloud albedo'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4292,7 +4292,7 @@ module GFS_diagnostics
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
         ExtDiag(idx)%mod_name = 'gfs_phys'
-	ExtDiag(idx)%intpl_method = 'bilinear'
+        ExtDiag(idx)%intpl_method = 'bilinear'
         ExtDiag(idx)%data%var4 => IntDiag%f1isccp_cosp(:,:,:)
 
      endif ! END ISCCP
@@ -4313,7 +4313,7 @@ module GFS_diagnostics
         ! MODIS Liquid Cloud Fraction
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'CLWMODIS'
+        ExtDiag(idx)%name = 'CLWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Fraction'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4324,7 +4324,7 @@ module GFS_diagnostics
         ! MODIS Ice Cloud Fraction
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'MODIS Ice Cloud Fraction'
+        ExtDiag(idx)%name = 'MODIS Ice Cloud Fraction'
         ExtDiag(idx)%desc = 'CLIMODIS'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4335,7 +4335,7 @@ module GFS_diagnostics
         ! MODIS High Level Cloud Fraction
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'CLHMODIS'
+        ExtDiag(idx)%name = 'CLHMODIS'
         ExtDiag(idx)%desc = 'MODIS High Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4346,7 +4346,7 @@ module GFS_diagnostics
         ! MODIS Mid Level Cloud Fraction
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'CLMMODIS'
+        ExtDiag(idx)%name = 'CLMMODIS'
         ExtDiag(idx)%desc = 'MODIS Mid Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4357,7 +4357,7 @@ module GFS_diagnostics
         ! MODIS Low Level Cloud Fraction
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'CLLMODIS'
+        ExtDiag(idx)%name = 'CLLMODIS'
         ExtDiag(idx)%desc = 'MODIS Low Level Cloud Fraction'
         ExtDiag(idx)%unit = '%'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4368,7 +4368,7 @@ module GFS_diagnostics
         ! MODIS Total Cloud Optical Thickness*CLTMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUTMODIS'
+        ExtDiag(idx)%name = 'TAUTMODIS'
         ExtDiag(idx)%desc = 'MODIS Total Cloud Optical Thickness*CLTMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4379,7 +4379,7 @@ module GFS_diagnostics
         ! MODIS Liquid Cloud Optical Thickness*CLWMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUWMODIS'
+        ExtDiag(idx)%name = 'TAUWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Optical Thickness*CLWMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4390,7 +4390,7 @@ module GFS_diagnostics
         ! MODIS Ice Cloud Optical Thickness*CLIMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUIMODIS'
+        ExtDiag(idx)%name = 'TAUIMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Optical Thickness*CLIMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4401,7 +4401,7 @@ module GFS_diagnostics
         ! MODIS Total Cloud Optical Thickness (Log10 Mean)*CLTMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUTLOGMODIS'
+        ExtDiag(idx)%name = 'TAUTLOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Total Cloud Optical Thickness (Log10 Mean)*CLTMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4412,7 +4412,7 @@ module GFS_diagnostics
         ! MODIS Liquid Cloud Optical Thickness (Log10 Mean)*CLWMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUWLOGMODIS'
+        ExtDiag(idx)%name = 'TAUWLOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Optical Thickness (Log10 Mean)*CLWMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4423,7 +4423,7 @@ module GFS_diagnostics
         ! MODIS Ice Cloud Optical Thickness (Log10 Mean)*CLIMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'TAUILOGMODIS'
+        ExtDiag(idx)%name = 'TAUILOGMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Optical Thickness (Log10 Mean)*CLIMODIS'
         ExtDiag(idx)%unit = '1'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4434,7 +4434,7 @@ module GFS_diagnostics
         ! MODIS Liquid Cloud Particle Size*CLWMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'REFFCLWMODIS'
+        ExtDiag(idx)%name = 'REFFCLWMODIS'
         ExtDiag(idx)%desc = 'MODIS Liquid Cloud Particle Size*CLWMODIS'
         ExtDiag(idx)%unit = 'm'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4445,7 +4445,7 @@ module GFS_diagnostics
         ! MODIS Ice Cloud Particle Size*CLIMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'REFFCLIMODIS'
+        ExtDiag(idx)%name = 'REFFCLIMODIS'
         ExtDiag(idx)%desc = 'MODIS Ice Cloud Particle Size*CLIMODIS'
         ExtDiag(idx)%unit = 'm'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4456,7 +4456,7 @@ module GFS_diagnostics
         ! MODIS Cloud Top Pressure*CLTMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'PCTMODIS'
+        ExtDiag(idx)%name = 'PCTMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Top Pressure*CLTMODIS'
         ExtDiag(idx)%unit = 'Pa'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4467,7 +4467,7 @@ module GFS_diagnostics
         ! MODIS Cloud Liquid Water Path*CLWMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'LWPMODIS'
+        ExtDiag(idx)%name = 'LWPMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Liquid Water Path*CLWMODIS'
         ExtDiag(idx)%unit = 'kg m-2'
         ExtDiag(idx)%mask = 'cosp_passive'
@@ -4478,7 +4478,7 @@ module GFS_diagnostics
         ! MODIS Cloud Ice Water Path*CLIMODIS
         idx = idx + 1
         ExtDiag(idx)%axes = 2
-	ExtDiag(idx)%name = 'IWPMODIS'
+        ExtDiag(idx)%name = 'IWPMODIS'
         ExtDiag(idx)%desc = 'MODIS Cloud Ice Water Path*CLIMODIS'
         ExtDiag(idx)%unit = 'kg m-2'
         ExtDiag(idx)%mask = 'cosp_passive'
