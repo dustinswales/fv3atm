@@ -292,7 +292,7 @@ CONTAINS
           hist%num_axes_phys = 3
         endif
 
-     endif
+      endif
     enddo
 
     allocate(hist%buffer_phys_bl(hist%isco:hist%ieco,hist%jsco:hist%jeco,nrgst_bl))
