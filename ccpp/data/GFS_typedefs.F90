@@ -835,10 +835,6 @@ module GFS_typedefs
     integer              :: nsswr           !< integer trigger for shortwave radiation
     integer              :: nslwr           !< integer trigger for longwave  radiation
     integer              :: nhfrad          !< number of timesteps for which to call radiation on physics timestep (coldstarts)
-    integer              :: levr            !< number of vertical levels for radiation calculations
-    integer              :: levrp1          !< number of vertical levels for radiation calculations plus one
-    integer              :: lmk
-    integer              :: lmp
     integer              :: nbdlw
     integer              :: nbdsw
     integer              :: NF_AESW
@@ -3538,7 +3534,6 @@ module GFS_typedefs
     real(kind=kind_phys) :: fhswr          = 3600.           !< frequency for shortwave radiation (secs)
     real(kind=kind_phys) :: fhlwr          = 3600.           !< frequency for longwave radiation (secs)
     integer              :: nhfrad         = 0               !< number of timesteps for which to call radiation on physics timestep (coldstarts)
-    integer              :: levr           = -99             !< number of vertical levels for radiation calculations
     integer              :: nfxr           = 39+6            !< second dimension of input/output array fluxr
     logical              :: iaerclm        = .false.         !< flag for initializing aero data
     integer              :: iccn           =  0              !< logical to use IN CCN forcing for MG2/3
@@ -4232,7 +4227,7 @@ module GFS_typedefs
                           !--- cdeps inline parameters
                                use_cdeps_inline,                                            &
                           !--- radiation parameters
-                               fhswr, fhlwr, levr, nfxr, iaerclm, iflip, isol, ico2, ialb,  &
+                               fhswr, fhlwr, nfxr, iaerclm, iflip, isol, ico2, ialb,        &
                                isot, iems, iaer, icliq_sw, iovr, ictm, isubc_sw,            &
                                isubc_lw, lcrick, lcnorm, lwhtr, swhtr,                      &
                                nhfrad, idcor, dcorr_con, xr_con, xr_exp,                    &
@@ -4762,18 +4757,6 @@ module GFS_typedefs
       if (Model%me == Model%master .and. nhfrad>0) &
         write(*,'(a,i0)') 'Number of high-frequency radiation calls for coldstart run: ', nhfrad
     endif
-
-    if (levr < 0) then
-      Model%levr           = levs
-    else if (levr > levs) then
-      write(0,*) "Logic error, number of radiation levels (levr) cannot exceed number of model levels (levs)"
-      stop
-    else
-      Model%levr           = levr
-    endif
-    Model%levrp1           = Model%levr + 1
-    Model%lmk              = Model%levr + LTP
-    Model%lmp              = Model%levr + 1 + LTP
     Model%nbdlw            = NBDLW
     Model%nbdsw            = NBDSW
     Model%NF_AESW          = 3
@@ -4894,11 +4877,6 @@ module GFS_typedefs
     Model%rrtmgp_lw_phys_blksz   = rrtmgp_lw_phys_blksz
     Model%rrtmgp_sw_phys_blksz   = rrtmgp_sw_phys_blksz
     if (Model%do_RRTMGP) then
-       ! RRTMGP incompatible with levr /= levs
-       if (Model%levr /= Model%levs) then
-          write(0,*) "Logic error, RRTMGP only works with levr = levs"
-          stop
-       end if
        if (Model%doGP_sgs_mynn .and. .not. do_mynnedmf) then
           write(0,*) "Logic error, RRTMGP flag doGP_sgs_mynn only works with do_mynnedmf=.true."
           stop
@@ -7020,7 +6998,6 @@ module GFS_typedefs
       print *, ' nsswr             : ', Model%nsswr
       print *, ' nslwr             : ', Model%nslwr
       print *, ' nhfrad            : ', Model%nhfrad
-      print *, ' levr              : ', Model%levr
       print *, ' nfxr              : ', Model%nfxr
       print *, ' ntrcaer           : ', Model%ntrcaer
       print *, ' lmfshal           : ', Model%lmfshal
@@ -8267,7 +8244,7 @@ module GFS_typedefs
     if (Model%imp_physics == Model%imp_physics_fer_hires) then
      allocate (Diag%train     (IM,Model%levs))
     end if
-    allocate (Diag%cldfra     (IM,Model%levr+LTP))
+    allocate (Diag%cldfra     (IM,Model%levs+LTP))
     allocate (Diag%cldfra2d   (IM))
     allocate (Diag%total_albedo (IM))
     allocate (Diag%lwp_ex (IM))
