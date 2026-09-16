@@ -120,13 +120,12 @@ contains
     ! Locals
     integer :: i, io, ierr, sec, iCol, mpi_size, mpi_rank, rc, dt_dyn, dt_phys
     integer :: times(6), timee(6), ttime, logUnits(2), nthrds, me, master, nlevs
-    ! Horizontal-resolution proxy (lonr/latr) and reference vertical pressure profile
-    ! (ak/bk) for UGWPv1 under MPAS; see the block below and MPAS_init.F90. ak/bk are built
-    ! in MPAS's own RKIND (matching ufs_mpas_reference_pressure) and converted to CCPP's
-    ! kind_phys only at the MPAS_initialize() call, matching how MPAS_init.F90 used to
-    ! convert Init_parm%ak/%bk before the Cfg-based plumbing was refactored away.
+    ! Horizontal-resolution proxy (lonr/latr) and dycore-neutral reference pressure
+    ! profile (p_ref) for UGWPv1 under MPAS; see the block below and MPAS_init.F90.
+    ! p_ref is built in MPAS's own RKIND (matching ufs_mpas_reference_pressure) and
+    ! converted to CCPP's kind_phys only at the MPAS_initialize() call.
     integer :: lonr, latr
-    real(RKIND), allocatable :: ak(:), bk(:)
+    real(RKIND), allocatable :: p_ref(:)
     logical :: file_exists
     real(MPAS_kind_phys) :: start_time, stop_time
     integer              :: nConstituents   !< Number of constituents (tracers).
@@ -284,12 +283,11 @@ contains
     call ESMF_TimeGet (CurrTime,  YY=cdat(1),MM=cdat(2),DD=cdat(3),H=cdat(5),M=cdat(6),S=cdat(7),rc=rc)
 
     ! Reference vertical pressure profile for UGWPv1. Must be built before
-    ! MPAS_initialize(), which is where control_initialize() consumes ak/bk.
+    ! MPAS_initialize(), which is where control_initialize() consumes p_ref.
     ! Safe here: the MPAS dycore init above (ufs_mpas_init) has already populated the base
     ! state and set nlevs.
-    allocate(ak(nlevs + 1))
-    allocate(bk(nlevs + 1))
-    call ufs_mpas_reference_pressure(nlevs, ak, bk)
+    allocate(p_ref(nlevs + 1))
+    call ufs_mpas_reference_pressure(nlevs, p_ref)
 
     ! Horizontal-resolution proxy for the GFS physics (lonr/latr = Gaussian-grid points
     ! around the equator / pole to pole). For a quasi-uniform mesh the number of cells
@@ -305,7 +303,7 @@ contains
          UFSATM_statein, UFSATM_stateout, UFSATM_cldprop, UFSATM_radtend, UFSATM_coupling,        &
          me, master, mpicomm, nlevs, dt_dyn, dt_phys, nml_funit, nml_filename, bdat, cdat, nwat,  &
          fcst_ntasks, blksz, input_nml_file, constituent_name, constituent_type, restart,         &
-         gnx=lonr, gny=latr, ak=real(ak, MPAS_kind_phys), bk=real(bk, MPAS_kind_phys))
+         gnx=lonr, gny=latr, p_ref=real(p_ref, MPAS_kind_phys))
 
     !> Read and initialize landuse fields needed by surface physics.
     call ufs_mpas_landuse_read(mpicomm, me, master)

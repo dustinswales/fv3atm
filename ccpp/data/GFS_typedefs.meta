@@ -4144,6 +4144,13 @@
   dimensions = (vertical_interface_dimension)
   type = real
   kind = kind_phys
+[p_ref]
+  standard_name = air_pressure_of_reference_atmosphere_at_interface
+  long_name = pressure of a dycore-neutral reference atmosphere at layer interfaces, used to compute log-pressure height
+  units = Pa
+  dimensions = (vertical_interface_dimension)
+  type = real
+  kind = kind_phys
 [levsp1]
   standard_name = vertical_interface_dimension
   long_name = number of vertical levels plus one

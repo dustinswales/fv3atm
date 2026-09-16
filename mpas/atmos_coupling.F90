@@ -1152,11 +1152,22 @@ contains
         !physics_sfcprop % sncovr_ice(iCol) =
         !physics_sfcprop % snodi(iCol) =
         !physics_sfcprop % weasdi(iCol) =
-        do iLev=1, nSoilLevels
-          physics_sfcprop % sh2o(iCol, iLev) = sh2o(iLev, iCol)
-          physics_sfcprop % smois(iCol, iLev) = smois(iLev, iCol)
+        ! sh2o/smois/tslb (GFS_typedefs.F90) are only allocated for RUC
+        ! (Model%lsm == Model%lsm_ruc); for Noah/Noah-MP they stay null pointers, so
+        ! writing them unconditionally segfaults under lsm=1/2.
+        if (physics_control % lsm == physics_control % lsm_ruc) then
+          do iLev=1, nSoilLevels
+            physics_sfcprop % sh2o(iCol, iLev) = sh2o(iLev, iCol)
+            physics_sfcprop % smois(iCol, iLev) = smois(iLev, iCol)
+            physics_sfcprop % tslb(iCol, iLev) = tslb(iLev, iCol)
+          end do
+        end if
+        ! smc/stc are allocated for every LSM, but only with Model%lsoil levels
+        ! (4 for Noah/Noah-MP) -- not nSoilLevels, which is the MPAS IC's own soil
+        ! discretization (9 here, a RUC-style IC) and can exceed Model%lsoil, so
+        ! cap the loop or this overruns the smc/stc arrays.
+        do iLev=1, min(nSoilLevels, physics_control % lsoil)
           physics_sfcprop % smc(iCol, iLev) = smois(iLev, iCol)
-          physics_sfcprop % tslb(iCol, iLev) = tslb(iLev, iCol)
           physics_sfcprop % stc(iCol, iLev) = tslb(iLev, iCol)
           !need to define stc, smc, slc instead becasue CCPP version of RUC LSM expects that? set lsoil = lsoil_lsm = 9?
         end do
@@ -1322,7 +1333,7 @@ contains
   !> "ak -pa bk-dimensionless from surf" comment in cires_ugwpv1_module.F90.
   !> Called once, before MPAS_initialize().
   !> #########################################################################################
-  subroutine ufs_mpas_reference_pressure(levs, ak, bk)
+  subroutine ufs_mpas_reference_pressure(levs, p_ref)
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_derived_types,   only : MPAS_LOG_CRIT
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension, mpas_pool_get_array
@@ -1331,8 +1342,11 @@ contains
 
     ! Arguments
     integer,          intent(in)  :: levs
-    real(kind=RKIND), intent(out) :: ak(levs+1)   !< reference pressure at layer centres (Pa)
-    real(kind=RKIND), intent(out) :: bk(levs+1)   !< zero; MPAS is not on a hybrid coordinate
+    real(kind=RKIND), intent(out) :: p_ref(levs+1)   !< reference pressure at layer centres (Pa).
+    !< MPAS has no hybrid sigma-pressure coordinate, so unlike FV3 this is not derived
+    !< from ak/bk coefficients -- it is computed directly as the global-mean base-state
+    !< pressure profile, and handed to the host as the dycore-neutral p_ref quantity
+    !< (see GFS_typedefs.F90::control_initialize and cires_ugwpv1_module.F90).
 
     ! Locals
     type(mpas_pool_type), pointer :: mesh_pool, diag_pool
@@ -1376,17 +1390,16 @@ contains
                            messageType=MPAS_LOG_CRIT)
     end if
 
-    ak(1:levs) = globalSum(1:levs) / real(nCellsGlobal, RKIND)
+    p_ref(1:levs) = globalSum(1:levs) / real(nCellsGlobal, RKIND)
     ! Model lid. cires_ugwpv1_module.F90:248 documents the top of the profile as zero
-    ! pressure; UGWPv1 reads only 1:levs, so this element exists to satisfy the ak(levs+1)
+    ! pressure; UGWPv1 reads only 1:levs, so this element exists to satisfy the p_ref(levs+1)
     ! declaration in its interface.
-    ak(levs+1) = 0.0_RKIND
-    bk(:)      = 0.0_RKIND
+    p_ref(levs+1) = 0.0_RKIND
 
     call mpas_log_write(subname // ': MPAS reference pressure profile from base state, ' // &
                         '$i global cells', intArgs=[nCellsGlobal])
-    call mpas_log_write(subname // ': surface ak = $r Pa, model-top layer ak = $r Pa', &
-                        realArgs=[ak(1), ak(levs)])
+    call mpas_log_write(subname // ': surface p_ref = $r Pa, model-top layer p_ref = $r Pa', &
+                        realArgs=[p_ref(1), p_ref(levs)])
 
     deallocate(localSum, globalSum)
     nullify (mesh_pool)

@@ -22,7 +22,7 @@ contains
   subroutine MPAS_initialize (Model, Diag, Grid, Tbd, SfcProp, Statein, Stateout, CldProp,   &
        RadTend, Coupling, me, master, mpicomm, levs, dt_dyn, dt_phys, nml_funit,             &
        nml_filename, bdat, cdat, nwat, fcst_ntasks, blksz, input_nml_file, constituent_name, &
-       constituent_type, restart, gnx, gny, ak, bk)
+       constituent_type, restart, gnx, gny, p_ref)
 #ifdef _OPENMP
     use omp_lib
 #endif
@@ -44,16 +44,15 @@ contains
     character(len=:), pointer,   intent(in   ) :: input_nml_file(:)
     character(len=*),            intent(in   ) :: constituent_name(:)
     integer,                     intent(in   ) :: constituent_type(:)
-    ! Equivalent Gaussian-grid point counts (lonr/latr) and reference vertical pressure
-    ! profile, needed by UGWPv1 under a dycore that is not on FV3's hybrid sigma-pressure
-    ! coordinate (see atmos_coupling.F90::ufs_mpas_reference_pressure and
-    ! atmos_model.F90::atmos_model_init). Optional: absent for cores/suites that don't need
-    ! them, in which case control_initialize's MPAS branch leaves Model%lonr/latr/ak/bk at
-    ! their existing values.
+    ! Equivalent Gaussian-grid point count (lonr/latr) and dycore-neutral reference
+    ! pressure profile, needed by UGWPv1 under a dycore that has no FV3-style hybrid
+    ! sigma-pressure coordinate to derive one from (see
+    ! atmos_coupling.F90::ufs_mpas_reference_pressure and atmos_model.F90::atmos_model_init).
+    ! Optional: absent for cores/suites that don't need them, in which case
+    ! control_initialize's MPAS branch leaves Model%lonr/latr/p_ref at their existing values.
     integer,           optional, intent(in   ) :: gnx
     integer,           optional, intent(in   ) :: gny
-    real(kind_phys),   optional, intent(in   ) :: ak(:)
-    real(kind_phys),   optional, intent(in   ) :: bk(:)
+    real(kind_phys),   optional, intent(in   ) :: p_ref(:)
     type(GFS_control_type),      intent(inout) :: Model
     type(GFS_diag_type),         intent(inout) :: Diag
     type(GFS_grid_type),         intent(inout) :: Grid
@@ -84,7 +83,7 @@ contains
     call Model%init(nml_funit, nml_filename, me, master, 0, levs, real(dt_dyn, kind_phys),   &
          real(dt_phys, kind_phys), 0, bdat, cdat, nwat, constituent_name, constituent_type,  &
          input_nml_file, blksz, restart, mpicomm, fcst_ntasks, nthrds,                       &
-         gnx=gnx, gny=gny, ak=ak, bk=bk)
+         gnx=gnx, gny=gny, p_ref=p_ref)
 
     ! Allocate data containers for physics.
     call Grid%create(Model)
