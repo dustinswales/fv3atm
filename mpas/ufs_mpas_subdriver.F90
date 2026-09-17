@@ -510,6 +510,18 @@ contains
     call mpas_allocate_scratch_field(field_2d_real)
     nullify(field_2d_real)
 
+    call mpas_pool_get_field(domain_ptr % blocklist % allfields, 'tend_ru_physics', field_2d_real, timelevel=1)
+    call mpas_allocate_scratch_field(field_2d_real)
+    nullify(field_2d_real)
+
+    call mpas_pool_get_field(domain_ptr % blocklist % allfields, 'tend_rtheta_physics', field_2d_real, timelevel=1)
+    call mpas_allocate_scratch_field(field_2d_real)
+    nullify(field_2d_real)
+
+    call mpas_pool_get_field(domain_ptr % blocklist % allfields, 'tend_rho_physics', field_2d_real, timelevel=1)
+    call mpas_allocate_scratch_field(field_2d_real)
+    nullify(field_2d_real)
+
     call mpas_log_write('Successful initialization of MPAS dynamical core')
 
   end subroutine ufs_mpas_atm_core_init
