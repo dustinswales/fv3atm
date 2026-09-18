@@ -290,11 +290,11 @@ contains
     ! Locals
     type(mpas_pool_type),  pointer :: state_pool, mesh_pool, tend_pool, diag_pool, tend_phys
     real(kind=RKIND), pointer :: mass(:,:), mass_edge(:,:), exner(:,:), theta_m(:,:), zgrid(:,:), zz(:,:)
-    real(kind=RKIND), pointer :: pressure_b(:,:), pressure_p(:,:), tend_th_phys(:,:)
-    real(kind=RKIND), pointer :: tend_theta_phys(:,:), tend_theta_dyn(:,:)
-    real(kind=RKIND), pointer :: tend_u_phys(:,:), tend_ru_phys(:,:)
-    real(kind=RKIND), pointer :: tend_uzonal(:,:), tend_umerid(:,:)
-    real(kind=RKIND), pointer :: scalars(:,:,:), tend_scalars_phys(:,:,:), tend_scalars_dyn(:,:,:)
+    real(kind=RKIND), pointer :: pressure_b(:,:), pressure_p(:,:)
+    real(kind=RKIND), pointer :: tend_u_phys(:,:)
+    real(kind=RKIND), pointer :: tend_uzonal(:,:), tend_umerid(:,:), tend_rtheta_phys(:,:)
+    real(kind=RKIND), pointer :: tend_rho_phys(:,:), tend_ru_phys(:,:)
+    real(kind=RKIND), pointer :: scalars(:,:,:), tend_scalars(:,:,:)
     real(kind=RKIND), pointer :: surface_pressure(:)
     integer, pointer :: nCells, nCellsSolve, num_scalars, nVertLevels, nEdges, nEdgesSolve
     integer, pointer :: index_qv => null()
@@ -309,7 +309,7 @@ contains
     integer, pointer :: index_nwfa => null()
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer :: iCol,iLay,ithread,iScalar
-    real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2
+    real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
     logical :: debug=.false.
     integer, save :: ncall_p2m = 0
     integer :: diag_unit, nbad
@@ -359,30 +359,33 @@ contains
     call mpas_pool_get_array(diag_pool, 'pressure_base',    pressure_b)
     call mpas_pool_get_array(diag_pool, 'pressure_p',       pressure_p)
     call mpas_pool_get_array(diag_pool, 'exner',            exner)
-    call mpas_pool_get_array(tend_phys, 'tend_uzonal',      tend_uzonal)
-    call mpas_pool_get_array(tend_phys, 'tend_umerid',      tend_umerid)
+    ! Physics tendencies used by MPAS during time integration.
+    call mpas_pool_get_array(tend_phys, 'tend_uzonal',         tend_uzonal)
+    call mpas_pool_get_array(tend_phys, 'tend_umerid',         tend_umerid)
+    call mpas_pool_get_array(tend_phys, 'tend_rtheta_physics', tend_rtheta_phys)
+    call mpas_pool_get_array(tend_phys, 'tend_rho_physics',    tend_rho_phys)
+    call mpas_pool_get_array(tend_phys, 'tend_ru_physics',     tend_ru_phys)
+    call mpas_pool_get_array(tend_pool, 'scalars_tend',        tend_scalars)
 
     ! Allocate/initialize local variables
-    allocate(tend_th_phys(nVertLevels,nCellsSolve+1))
-    allocate(tend_theta_phys(nVertLevels,nCellsSolve+1))
-    allocate(tend_scalars_phys(num_scalars, nVertLevels,nCellsSolve+1))
     allocate(tend_u_phys(nVertLevels,nEdges+1))
-    tend_th_phys(:,:)        = 0._RKIND
-    tend_theta_phys(:,:)     = 0._RKIND
-    tend_scalars_phys(:,:,:) = 0._RKIND
-    tend_u_phys(:,:)         = 0._RKIND
+    tend_u_phys(:,:) = 0._RKIND
 
-    !> GJF: Add accumulated tendencies from the physics group
+    ! Initalize physics tendencies in MPAS.
+    tend_scalars(:,:,:)   = 0._RKIND
+    tend_rtheta_phys(:,:) = 0._RKIND
+    tend_rho_phys(:,:)    = 0._RKIND
+    tend_ru_phys(:,:)     = 0._RKIND
 
     !> #####################################################################################
-    !> 1) Update MPAS "scalar" tendencies.
+    !> 1) Update MPAS tendency "tend_scalars".
     !> #####################################################################################
 
     ! Specific humidity
     do ithread=1,nThreads
       do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-        do iLay = 1,nVertLevels
-           tend_scalars_phys(index_qv,iLay,iCol) = tend_scalars_phys(index_qv,iLay,iCol) + &
+        do iLay = 1,nVertLevels 
+           tend_scalars(index_qv,iLay,iCol) = tend_scalars(index_qv,iLay,iCol) + &
                 physics_state % dqdt(iCol,iLay,index_qv)*mass(iLay,iCol)
         end do
       end do
@@ -392,8 +395,8 @@ contains
     if(associated(index_qc)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_qc,iLay,iCol) = tend_scalars_phys(index_qc,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_qc,iLay,iCol) = tend_scalars(index_qc,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_qc)*mass(iLay,iCol)
           end do
         end do
@@ -404,8 +407,8 @@ contains
     if(associated(index_qi)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_qi,iLay,iCol) = tend_scalars_phys(index_qi,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_qi,iLay,iCol) = tend_scalars(index_qi,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_qi)*mass(iLay,iCol)
           end do
         end do
@@ -416,8 +419,8 @@ contains
     if(associated(index_qr)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_qr,iLay,iCol) = tend_scalars_phys(index_qr,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_qr,iLay,iCol) = tend_scalars(index_qr,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_qr)*mass(iLay,iCol)
           end do
         end do
@@ -428,8 +431,8 @@ contains
     if(associated(index_qs)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_qs,iLay,iCol) = tend_scalars_phys(index_qs,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_qs,iLay,iCol) = tend_scalars(index_qs,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_qs)*mass(iLay,iCol)
           end do
         end do
@@ -440,8 +443,8 @@ contains
     if(associated(index_qg)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_qg,iLay,iCol) = tend_scalars_phys(index_qg,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_qg,iLay,iCol) = tend_scalars(index_qg,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_qg)*mass(iLay,iCol)
           end do
         end do
@@ -452,8 +455,8 @@ contains
     if(associated(index_nc)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_nc,iLay,iCol) = tend_scalars_phys(index_nc,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_nc,iLay,iCol) = tend_scalars(index_nc,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_nc)*mass(iLay,iCol)
           end do
         end do
@@ -464,8 +467,8 @@ contains
     if(associated(index_ni)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_ni,iLay,iCol) = tend_scalars_phys(index_ni,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_ni,iLay,iCol) = tend_scalars(index_ni,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_ni)*mass(iLay,iCol)
           end do
         end do
@@ -476,8 +479,8 @@ contains
     if(associated(index_nifa)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_nifa,iLay,iCol) = tend_scalars_phys(index_nifa,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_nifa,iLay,iCol) = tend_scalars(index_nifa,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_nifa)*mass(iLay,iCol)
           end do
         end do
@@ -488,63 +491,40 @@ contains
     if(associated(index_nwfa)) then
       do ithread=1,nThreads
         do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_scalars_phys(index_nwfa,iLay,iCol) = tend_scalars_phys(index_nwfa,iLay,iCol) + &
+          do iLay = 1,nVertLevels 
+             tend_scalars(index_nwfa,iLay,iCol) = tend_scalars(index_nwfa,iLay,iCol) + &
                   physics_state % dqdt(iCol,iLay,index_nwfa)*mass(iLay,iCol)
           end do
         end do
       end do
     end if
 
-    ! Update MPAS tendencies (scalars)
-    call mpas_pool_get_array(tend_pool, 'scalars_tend', tend_scalars_dyn)
+    ! Update halo points.
+    call dyn_mpas_exchange_halo('tend_scalars',.true.)
+
+    !> #####################################################################################
+    !> 2) Update MPAS tendency "tend_rtheta_phys".
+    !> #####################################################################################
+    !
     do ithread = 1,nThreads
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
           do iLay = 1, nVertLevels
-             do iScalar = 1, num_scalars
-                tend_scalars_dyn(iScalar,iLay,iCol) = tend_scalars_dyn(iScalar,iLay,iCol) + tend_scalars_phys(iScalar,iLay,iCol)
-             end do
-          end do
-       end do
-    end do
-
-    !> #####################################################################################
-    !> 2) Update MPAS tendency "theta_m"
-    !> #####################################################################################
-    ! Add accumulated temperature tendencies from the physics group, convert from temperature
-    ! to rho*potential temperature (T -> rtheta).
-    do ithread=1,nThreads
-       do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels
-             tend_th_phys(iLay,iCol) = tend_th_phys(iLay,iCol) + (physics_state % dtdt(iCol,iLay)/exner(iLay,iCol))*mass(iLay,iCol)
-          end do
-       end do
-    end do
-
-    ! Convert from the tendency of potential temperature to the tendency of the  modified
-    ! potential temperature (rtheta -> rtheta_m).
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1, nVertLevels
+             ! Add accumulated temperature tendencies from the physics group, convert from temperature
+             ! to rho*potential temperature (T -> rtheta). 
+             tend_th_phys = (physics_state % dtdt(iCol,iLay)/exner(iLay,iCol))*mass(iLay,iCol)
              coeff = (1. + rv/rgas * scalars(index_qv,iLay,iCol))
-             tend_th_phys(iLay,iCol) = coeff * tend_th_phys(iLay,iCol) + rv/rgas * theta_m(iLay,iCol) * tend_scalars_phys(index_qv,iLay,iCol) / coeff
-             tend_theta_phys(iLay,iCol) = tend_theta_phys(iLay,iCol) + tend_th_phys(iLay,iCol)
+             ! Convert from the tendency of potential temperature to the tendency of the  modified
+             ! potential temperature (rtheta -> rtheta_m). 
+             tend_rtheta_phys(iLay,iCol) = coeff * tend_th_phys + rv/rgas * theta_m(iLay,iCol) * tend_scalars(index_qv,iLay,iCol) / coeff
           end do
        end do
     end do
 
-    ! Update MPAS tendency (theta_m)
-    call mpas_pool_get_array(tend_pool, 'theta_m', tend_theta_dyn)
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1, nVertLevels
-               tend_theta_dyn(iLay,iCol) = tend_theta_dyn(iLay,iCol) + tend_theta_phys(iLay,iCol)
-          end do
-       end do
-    end do
+    ! Update halo points.
+    call dyn_mpas_exchange_halo('tend_rtheta_phys',.true.)
 
     !> #####################################################################################
-    !> 3) Update MPAS tendency "ru"
+    !> 3) Update MPAS tendency "tend_ru_phys".
     !> #####################################################################################
 
     ! First, need to regrid from grid-centers (physics) to grid-edges (dynamics)...
@@ -565,13 +545,8 @@ contains
     ! Finally, compute wind tendency at grid-edges.
     call tend_toEdges(mesh_pool, tend_uzonal, tend_umerid, tend_u_phys)
 
-    ! Hand the mass-weighted edge-normal tendency to the dynamics through
-    ! tend_ru_physics, the field atm_compute_dyn_tend adds to tend_u at every RK
-    ! stage. (The generic tend%u is rebuilt from scratch each stage, so adding to
-    ! it has no effect.) UFS owns this field: it is assigned, not accumulated, once
-    ! per physics step, and persists between steps in the MPAS_UFS_DYCORE build.
-    call mpas_pool_get_array(tend_phys, 'tend_ru_physics', tend_ru_phys)
-    do iCol = 1,nEdges
+    ! Update MPAS tendency (ru)
+    do iCol = 1,nEdgesSolve
        do iLay = 1, nVertLevels
           tend_ru_phys(iLay,iCol) = tend_u_phys(iLay,iCol)*mass_edge(iLay,iCol)
        end do
@@ -627,6 +602,9 @@ contains
        close(diag_unit)
     end if
 
+    ! Update halo points.
+    call dyn_mpas_exchange_halo('tend_ru_phys',.true.)
+
     !> #####################################################################################
     !> Diagnostics
     !> #####################################################################################
@@ -646,9 +624,6 @@ contains
     enddo
 
     ! Housekeeping
-    deallocate(tend_th_phys)
-    deallocate(tend_theta_phys)
-    deallocate(tend_scalars_phys)
     deallocate(tend_u_phys)
     nullify (state_pool)
     nullify (mesh_pool)
