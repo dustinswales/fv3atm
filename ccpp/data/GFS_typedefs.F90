@@ -777,9 +777,14 @@ module GFS_typedefs
     integer              :: nx              !< number of points in the i-dir for this MPI-domain
     integer              :: ny              !< number of points in the j-dir for this MPI-domain
     integer              :: levs            !< number of vertical levels
-    !--- ak/bk for pressure level calculations
+    !--- ak/bk for pressure level calculations (FV3 only -- its native hybrid coordinate)
     real(kind=kind_phys), pointer :: ak(:)  !< from surface (k=1) to TOA (k=levs)
     real(kind=kind_phys), pointer :: bk(:)  !< from surface (k=1) to TOA (k=levs)
+    !--- dycore-neutral reference (background) pressure profile at layer interfaces, Pa.
+    !    FV3 derives it from ak/bk below; MPAS supplies it directly (it has no hybrid
+    !    coordinate to derive it from). This is what UGWPv1 actually consumes -- see
+    !    cires_ugwpv1_module.F90::cires_ugwpv1_init.
+    real(kind=kind_phys), pointer :: p_ref(:)
     integer              :: levsp1          !< number of vertical levels plus one
     integer              :: levsm1          !< number of vertical levels minus one
     integer              :: cnx             !< number of points in the i-dir for this cubed-sphere face
@@ -3511,7 +3516,7 @@ module GFS_typedefs
                                  input_nml_file, blksz, restart,    &
                                  communicator, ntasks, nthreads,    &
                                  tile_num, isc, jsc, nx, ny,  cnx,  &
-                                 cny, gnx, gny, ak, bk, hydrostatic)
+                                 cny, gnx, gny, ak, bk, p_ref, hydrostatic)
 
 !--- modules
     use physcons,         only: con_rerth, con_pi, con_p0
@@ -3554,6 +3559,10 @@ module GFS_typedefs
     logical, optional,      intent(in) :: hydrostatic
     real(kind_phys), optional, dimension(:), intent(in) :: ak
     real(kind_phys), optional, dimension(:), intent(in) :: bk
+    ! Dycore-neutral reference pressure profile (see Model%p_ref). FV3 does not pass
+    ! this -- it is derived below from its ak/bk. MPAS passes it directly and does not
+    ! pass ak/bk at all.
+    real(kind_phys), optional, dimension(:), intent(in) :: p_ref
 
     !--- local variables
     integer :: i, j, n
@@ -4696,10 +4705,6 @@ module GFS_typedefs
        Model%jsc              = jsc
        Model%nx               = nx
        Model%ny               = ny
-       allocate (Model%ak(1:size(ak)))
-       allocate (Model%bk(1:size(bk)))
-       Model%ak               = ak
-       Model%bk               = bk
        Model%cnx              = cnx
        Model%cny              = cny
        Model%lonr             = gnx         ! number longitudinal points
@@ -4708,7 +4713,34 @@ module GFS_typedefs
     if (Model%dycore_active == Model%dycore_mpas) then
        Model%nx = sum(blksz)
        Model%ny = 1
+       ! lonr/latr have no default; the MPAS host supplies an equivalent Gaussian-grid
+       ! count (see atmos_model.F90). drag_suite uses lonr to scale cleff.
+       if (present(gnx)) Model%lonr = gnx
+       if (present(gny)) Model%latr = gny
     end if
+
+    !--- FV3's native hybrid sigma-pressure coordinate. FV3-specific; not used by UGWP
+    !    or anything else that must run under multiple dycores -- see Model%p_ref below.
+    if (present(ak) .and. present(bk)) then
+       allocate (Model%ak(1:size(ak)))
+       allocate (Model%bk(1:size(bk)))
+       Model%ak               = ak
+       Model%bk               = bk
+    endif
+
+    !--- Reference (background) pressure profile at layer interfaces, dycore neutral.
+    !    This -- not ak/bk -- is what UGWPv1 and any other multi-dycore-capable consumer
+    !    should use. FV3 has no reason to supply this directly: it is derived here from
+    !    the ak/bk it already passes above. MPAS has no hybrid coordinate to derive it
+    !    from, so it computes the profile itself
+    !    (atmos_coupling::ufs_mpas_reference_pressure) and passes it as p_ref.
+    if (present(ak) .and. present(bk)) then
+       allocate (Model%p_ref(1:size(ak)))
+       Model%p_ref = ak + con_p0*bk
+    else if (present(p_ref)) then
+       allocate (Model%p_ref(1:size(p_ref)))
+       Model%p_ref = p_ref
+    endif
     Model%levs             = levs
     Model%levsp1           = Model%levs + 1
     Model%levsm1           = Model%levs - 1
