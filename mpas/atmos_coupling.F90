@@ -500,7 +500,7 @@ contains
     end if
 
     ! Update halo points.
-    call dyn_mpas_exchange_halo('tend_scalars',.true.)
+    call dyn_mpas_exchange_halo('scalars_tend',.true.)
 
     !> #####################################################################################
     !> 2) Update MPAS tendency "tend_rtheta_phys".
@@ -521,7 +521,7 @@ contains
     end do
 
     ! Update halo points.
-    call dyn_mpas_exchange_halo('tend_rtheta_phys',.true.)
+    call dyn_mpas_exchange_halo('tend_rtheta_physics',.true.)
 
     !> #####################################################################################
     !> 3) Update MPAS tendency "tend_ru_phys".
@@ -603,7 +603,7 @@ contains
     end if
 
     ! Update halo points.
-    call dyn_mpas_exchange_halo('tend_ru_phys',.true.)
+    call dyn_mpas_exchange_halo('tend_ru_physics',.true.)
 
     !> #####################################################################################
     !> Diagnostics
@@ -986,7 +986,7 @@ contains
     real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
     real(RKIND), pointer :: albbck(:), skintemp(:), snow(:), snowc(:), snowh(:)
     real(RKIND), pointer :: sst(:), tmn(:), vegfra(:), seaice(:), xice(:), xland(:), znt(:), sfc_albedo(:), canwat(:)
-    real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:)
+    real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:)
     real(RKIND), pointer :: ter(:), shdmin(:), shdmax(:), snoalb(:)
     character(len=StrKIND), pointer :: mminlu
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_sfc_to_physics'
@@ -1030,8 +1030,9 @@ contains
     call mpas_pool_get_array(sfc_input, 'snoalb',    snoalb) !dim (nCells); annual maximum snow albedo
     call mpas_pool_get_array(sfc_input, 'greenfrac', greenfrac) !dim (nMonths nCells); monthly-mean climatological greenness fraction (percent)
     call mpas_pool_get_array(sfc_input, 'albedo12m', albedo12m) !dim (nMonhts nCells); monthly-mean climatological surface albedo (percent)
-
     call mpas_pool_get_array(sfc_input, 'canwat',    canwat) !dim (nCells); water in canopy (kg m^-2)
+    call mpas_pool_get_array(sfc_input, 'landusef',  landusef)
+    call mpas_pool_get_array(sfc_input, 'soilf',     soilf)
 
     call mpas_pool_get_array(diag_phys, 'znt',       znt) !dim (nCells); roughness length (m)
     call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo ) !dim (nCells); surface albedo (fraction)
@@ -1092,6 +1093,8 @@ contains
         !physics_sfcprop % q2m(iCol)   = 0.0_RKIND !no input in ICs; intent(out) in sfc_diag.F
         physics_sfcprop % vtype(iCol) = ivgtyp(iCol)
         physics_sfcprop % stype(iCol) = isltyp(iCol)
+        physics_sfcprop % vegtype_frac(iCol,:)  = landusef(:,iCol)
+        physics_sfcprop % soiltype_frac(iCol,:) = soilf(:,iCol)
         !physics_sfcprop % uustar(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme; found in diag_phys pool
         !physics_sfcprop % ffmm(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme
         !physics_sfcprop % ffhh(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme
@@ -1099,7 +1102,7 @@ contains
         physics_sfcprop % fice(iCol)   = xice(iCol) !potentially need to divide by a sea area fraction if necessary?
         physics_sfcprop % tisfc(iCol)  = skintemp(iCol)
         !physics_sfcprop % tprcp(iCol) =
-        !physics_sfcprop % srflag(iCol) =
+        physics_sfcprop % srflag(iCol) = 0.0_RKIND
         !physics_sfcprop % snowd(iCol) =
         physics_sfcprop % shdmin(iCol) = shdmin(iCol)
         physics_sfcprop % shdmax(iCol) = shdmax(iCol)
