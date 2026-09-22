@@ -1785,7 +1785,8 @@ contains
     integer, intent(in) :: day, month
     !
     integer, pointer :: nCellsSolve, landmask(:)
-    real(RKIND), pointer :: sfc_albbck(:), albedo12m(:,:), sfc_albedo(:), wt1, wt2
+    real(RKIND), pointer :: sfc_albbck(:), albedo12m(:,:), sfc_albedo(:)
+    real(RKIND) :: wt1, wt2
     type(mpas_pool_type), pointer :: sfc_input, diag_phys, mesh
     integer, parameter, dimension(12) :: mmd = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     integer ::  iCell, m1, m2

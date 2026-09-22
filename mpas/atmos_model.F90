@@ -398,7 +398,6 @@ contains
     ! Update surface properties for this day?
     call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
     if (doy .gt. doyc) then
-       call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
        call ESMF_TimeGet(Atmos%CurrTime, MM=moy, rc=rc)
        call ESMF_TimeGet(Atmos%CurrTime, DD=dom, rc=rc)
        call ufs_mpas_surface_update(dom, moy)
