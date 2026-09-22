@@ -124,7 +124,7 @@ contains
     ! profile (p_ref) for UGWPv1 under MPAS; see the block below and MPAS_init.F90.
     ! p_ref is built in MPAS's own RKIND (matching ufs_mpas_reference_pressure) and
     ! converted to CCPP's kind_phys only at the MPAS_initialize() call.
-    integer :: lonr, latr, moy, dom
+    integer :: lonr, latr
     real(RKIND), allocatable :: p_ref(:)
     logical :: file_exists
     real(MPAS_kind_phys) :: start_time, stop_time
@@ -308,10 +308,8 @@ contains
     !> Read and initialize landuse fields needed by surface physics.
     call ufs_mpas_landuse_read(mpicomm, me, master)
     call ESMF_TimeGet(CurrTime, dayOfYear=doyc, rc=rc)
-    call ESMF_TimeGet(CurrTime, MM=moy, rc=rc)
-    call ESMF_TimeGet(CurrTime, DD=dom, rc=rc)
     call ufs_mpas_landuse_update(doyc)
-    call ufs_mpas_surface_update(dom, moy)
+    doyc = -999
 
     !> Read RUC LSM slope data.
     call use_mpas_slopedata_read(mpicomm, me, master)
@@ -395,9 +393,9 @@ contains
     call ESMF_TimeGet (Atmos%CurrTime, YY=jdat(1),MM=jdat(2),DD=jdat(3),H=jdat(5),M=jdat(6),S=jdat(7),rc=rc)
     UFSATM_control%jdat(:) = jdat(:)
 
-    ! Update surface properties for this day?
+    ! Update surface properties for this day? (doyc is set to -999 in init to trigger here)
     call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
-    if (doy .gt. doyc) then
+    if ((doy .gt. doyc) .or. doyc==-999) then
        call ESMF_TimeGet(Atmos%CurrTime, MM=moy, rc=rc)
        call ESMF_TimeGet(Atmos%CurrTime, DD=dom, rc=rc)
        call ufs_mpas_surface_update(dom, moy)

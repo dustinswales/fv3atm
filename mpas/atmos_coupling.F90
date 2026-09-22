@@ -1824,7 +1824,7 @@ contains
     call mpas_pool_get_array(sfc_input,'landmask'  , landmask  )
     call mpas_pool_get_array(sfc_input,'albedo12m' , albedo12m )
     call mpas_pool_get_array(sfc_input,'sfc_albbck', sfc_albbck)
-    call mpas_pool_get_array(sfc_input,'sfc_albedo', sfc_albedo)
+    call mpas_pool_get_array(diag_phys,'sfc_albedo', sfc_albedo)
 
     ! Update background surface albedo
     do iCell = 1, nCellsSolve
