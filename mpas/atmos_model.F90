@@ -107,7 +107,7 @@ contains
     use ufs_mpas_io,            only : ufs_mpas_read_stream_lists, ufs_mpas_landuse_read
     use ufs_mpas_io,            only : use_mpas_slopedata_read
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_mpas_grid_to_physics, ufs_mpas_sfc_to_physics
-    use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_gwd_to_physics
+    use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_gwd_to_physics, ufs_mpas_surface_update
     use atmos_coupling_mod,     only : ufs_mpas_reference_pressure
     use MPAS_init,              only : MPAS_initialize
 
@@ -124,7 +124,7 @@ contains
     ! profile (p_ref) for UGWPv1 under MPAS; see the block below and MPAS_init.F90.
     ! p_ref is built in MPAS's own RKIND (matching ufs_mpas_reference_pressure) and
     ! converted to CCPP's kind_phys only at the MPAS_initialize() call.
-    integer :: lonr, latr
+    integer :: lonr, latr, moy, dom
     real(RKIND), allocatable :: p_ref(:)
     logical :: file_exists
     real(MPAS_kind_phys) :: start_time, stop_time
@@ -308,7 +308,10 @@ contains
     !> Read and initialize landuse fields needed by surface physics.
     call ufs_mpas_landuse_read(mpicomm, me, master)
     call ESMF_TimeGet(CurrTime, dayOfYear=doyc, rc=rc)
+    call ESMF_TimeGet(CurrTime, MM=moy, rc=rc)
+    call ESMF_TimeGet(CurrTime, DD=dom, rc=rc)
     call ufs_mpas_landuse_update(doyc)
+    call ufs_mpas_surface_update(dom, moy)
 
     !> Read RUC LSM slope data.
     call use_mpas_slopedata_read(mpicomm, me, master)
@@ -379,13 +382,13 @@ contains
   !> #########################################################################################
   subroutine atmos_model_radiation_physics(Atmos)
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_physics_to_mpas
-    use atmos_coupling_mod,     only : ufs_mpas_phys_diag, ufs_mpas_landuse_update
+    use atmos_coupling_mod,     only : ufs_mpas_phys_diag, ufs_mpas_landuse_update, ufs_mpas_surface_update
     type (atmos_control_type), intent(inout) :: Atmos
     ! Locals
     integer :: ierr
     real(MPAS_kind_phys) :: start_time, stop_time
     character(len=*), parameter :: subname = 'atmos_model::atmos_model_radiation_physics'
-    integer :: jdat(8), rc, doy
+    integer :: jdat(8), rc, doy, moy, dom
 
     ! Update physics time
     jdat(:) = 0
@@ -393,9 +396,12 @@ contains
     UFSATM_control%jdat(:) = jdat(:)
 
     ! Update surface properties for this day?
+    call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
     if (doy .gt. doyc) then
        call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
-       call ufs_mpas_landuse_update(doy)
+       call ESMF_TimeGet(Atmos%CurrTime, MM=moy, rc=rc)
+       call ESMF_TimeGet(Atmos%CurrTime, DD=dom, rc=rc)
+       call ufs_mpas_surface_update(dom, moy)
        doyc = doy
     endif
 

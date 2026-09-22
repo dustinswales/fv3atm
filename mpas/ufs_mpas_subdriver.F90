@@ -820,7 +820,7 @@ contains
     logical                 :: mpas_print_detailed_minmax_vel      = .true.
     logical                 :: mpas_print_global_minmax_sca        = .true.
     ! Namelist "physics"
-    logical                 :: mpas_sfc_albedo                     = .false.
+    logical                 :: mpas_sfc_albedo                     = .true.
     logical                 :: mpas_frac_seaice                    = .true.
     character (len=StrKIND) :: mpas_lsm_scheme                     = 'sf_ruc'
 

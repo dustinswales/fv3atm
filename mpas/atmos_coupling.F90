@@ -19,6 +19,7 @@ module atmos_coupling_mod
   public :: ufs_mpas_landuse_update
   public :: ufs_mpas_gwd_to_physics
   public :: ufs_mpas_reference_pressure
+  public :: ufs_mpas_surface_update
 
 contains
   !> #########################################################################################
@@ -53,7 +54,7 @@ contains
     real(kind=RKIND), pointer :: qv(:,:), qc(:,:), qr(:,:), qi(:,:), qs(:,:), qg(:,:)
     real(kind=RKIND), pointer :: ux(:,:), uy(:,:), theta_m(:,:), rho_zz(:,:), zgrid(:,:), zz(:,:)
     real(kind=RKIND), pointer :: exner(:,:), tracers(:,:,:), pressure_b(:,:), pressure_p(:,:)
-    real(kind=RKIND), pointer :: w(:,:), surface_pressure(:),  prsi(:,:), prsl(:,:), rho(:,:)
+    real(kind=RKIND), pointer :: w(:,:), surface_pressure(:), rho(:,:)
     real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_physics'
 
@@ -91,8 +92,6 @@ contains
     call mpas_pool_get_array(diag_phys,  'sfc_emiss' ,             sfc_emiss)
 
     ! Local variables
-    allocate(prsl(nCellsSolve, nVertLevels))
-    allocate(prsi(nCellsSolve, nVertLevels + 1))
     allocate(rho( nCellsSolve, nVertLevels))
 
     ! Copy fields from MPAS data containers to physics data containers.
@@ -139,9 +138,6 @@ contains
 
              ! MPAS provides vertical velocity at interfaces, compute layer mean, and convert from w -> omega
              physics_state % vvl(iCol,iLay) =  -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho(iCol,iLay)*gravity
-
-             ! Pressure (non-hydrostatic)
-             prsl(iCol,iLay) = pressure_p(iLay,iCol) + pressure_b(iLay,iCol)
           end do
           do iLay = nVertLevels,nVertLevels+1
              physics_state % phii(iCol,iLay)     = (zgrid(iLay,iCol) - zgrid(1,iCol))*gravity !(m -> m2/s2)
@@ -180,82 +176,9 @@ contains
        end do
     end do
 
-    ! Interpolation of pressure and temperature from layer-center to layer-interface
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 2,nVertLevels
-             tem1 = 1./(zgrid(iLay+1,iCol)-zgrid(iLay-1,iCol))
-             fzm_p = (zgrid(iLay,  iCol)-zgrid(iLay-1,iCol)) * tem1
-             fzp_p = (zgrid(iLay+1,iCol)-zgrid(iLay,  iCol)) * tem1
-             physics_state % tgri(iCol,iLay) = fzm_p*physics_state % tgrs(iCol,iLay) + fzp_p*physics_state % tgrs(iCol,iLay-1)
-             prsi(iCol,iLay) = fzm_p*prsl(iCol,iLay) + fzp_p*prsl(iCol,iLay-1)
-          enddo
-       enddo
-    enddo
-
-    ! Interpolation of pressure and temperature to the top-of-the-model
-    iLay = nVertLevels + 1
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          z0 = zgrid(iLay,iCol)
-          z1 = 0.5*(zgrid(iLay  ,iCol)+zgrid(iLay-1,iCol))
-          z2 = 0.5*(zgrid(iLay-1,iCol)+zgrid(iLay-2,iCol))
-          w1 = (z0-z2)/(z1-z2)
-          w2 = 1.-w1
-          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay-1) + w2*physics_state % tgrs(iCol,iLay-2)
-          prsi(iCol,iLay) = exp(w1*log(prsl(iCol,iLay-1))+w2*log(prsl(iCol,iLay-2)))
-       end do
-    end do
-
-    ! Recalculate the pressure and temperature  at the surface as an extrapolation of
-    ! the pressures in the 2 layers above the surface.
-    iLay = 1
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          z0 = zgrid(iLay,iCol)
-          z1 = 0.5*(zgrid(iLay  ,iCol)+zgrid(iLay+1,iCol))
-          z2 = 0.5*(zgrid(iLay+1,iCol)+zgrid(iLay+2,iCol))
-          w1 = (z0-z2)/(z1-z2)
-          w2 = 1.-w1
-          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay) + w2*physics_state % tgrs(iCol,iLay+1)
-          prsi(iCol,iLay) = w1*prsl(iCol,iLay)+w2*prsl(iCol,iLay+1)
-       end do
-    end do
-
-    ! Calculation of the hydrostatic pressure
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          ! Pressure at layer-interfaces
-          iLay = nVertLevels + 1
-          physics_state % prsi(iCol,iLay) = prsi(iCol,iLay)
-          do iLay = nVertLevels,1,-1
-             rho_a = rho(iCol,iLay) / (1.+tracers(index_qv,iLay,iCol))
-             physics_state % prsi(iCol,iLay)  = physics_state % prsi(iCol,iLay+1) + &
-                  gravity*rho(iCol,iLay)*physics_state % dzgrid(iCol,iLay)
-          end do
-          ! Pressure at layer-centers
-          do iLay = nVertLevels,1,-1
-             physics_state % prsl(iCol,iLay) = 0.5*(physics_state % prsi(iCol,iLay+1) + physics_state % prsi(iCol,iLay) )
-          end do
-          ! Pressure layer thickness
-          do iLay = 1,nVertLevels
-             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
-          end do
-          ! Pressure difference across layer-centers
-          physics_state % dp(iCol,1) = physics_state % prsi(iCol,1) - physics_state % prsi(iCol,2)
-          do iLay = 2,nVertLevels
-             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
-             physics_state % dpc(iCol,iLay)  = physics_state % prsl(iCol,iLay-1) - physics_state % prsl(iCol,iLay)
-          end do
-          physics_state % dpc(iCol,1)  = physics_state % prsi(iCol,1) - physics_state % prsl(iCol,1)
-          ! Surface pressure
-          physics_state % pgr(iCol) = physics_state % prsi(iCol,1)
-       end do
-    end do
+    call ufs_mpas_hydrostatic_pressure(physics_state, tracers(index_qv,:,:))
 
     ! Housekeeping
-    deallocate (prsl)
-    deallocate (prsi)
     deallocate (rho)
     nullify (mesh_pool)
     nullify (state_pool)
@@ -338,6 +261,9 @@ contains
     call mpas_pool_get_dimension(mesh_pool,  'nCells',      nCells)
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_dimension(state_pool, 'index_qv',    index_qv)
+    ! DJS: In DEBUG mode, MPAS will report a warning for any of these fields that haven't
+    !      been set. This can be ignored. Below we check to see if any of the fields are
+    !      associated before trying to access them.
     call mpas_pool_get_dimension(state_pool, 'index_qc',    index_qc)
     call mpas_pool_get_dimension(state_pool, 'index_qi',    index_qi)
     call mpas_pool_get_dimension(state_pool, 'index_qr',    index_qr)
@@ -986,7 +912,7 @@ contains
     real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
     real(RKIND), pointer :: albbck(:), skintemp(:), snow(:), snowc(:), snowh(:)
     real(RKIND), pointer :: sst(:), tmn(:), vegfra(:), seaice(:), xice(:), xland(:), znt(:), sfc_albedo(:), canwat(:)
-    real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:)
+    real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:), sfc_emiss(:)
     real(RKIND), pointer :: ter(:), shdmin(:), shdmax(:), snoalb(:)
     character(len=StrKIND), pointer :: mminlu
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_sfc_to_physics'
@@ -1036,7 +962,7 @@ contains
 
     call mpas_pool_get_array(diag_phys, 'znt',       znt) !dim (nCells); roughness length (m)
     call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo ) !dim (nCells); surface albedo (fraction)
-
+    call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss )
 
     ! write(*,*) 'shape/min/max dzs',SHAPE(dzs),minval(dzs),maxval(dzs)
     ! write(*,*) 'shape/min/max isltyp',SHAPE(isltyp),minval(isltyp),maxval(isltyp)
@@ -1121,12 +1047,12 @@ contains
         !physics_sfcprop % zorlw(iCol) =
         !physics_sfcprop % zorll(iCol) =
         !physics_sfcprop % zorli(iCol) =
-        !physics_sfcprop % albdirvis_lnd(iCol) =
-        !physics_sfcprop % albdirnir_lnd(iCol) =
-        !physics_sfcprop % albdifvis_lnd(iCol) =
-        !physics_sfcprop % albdifnir_lnd(iCol) =
-        !physics_sfcprop % emis_lnd(iCol) =
-        !physics_sfcprop % emis_ice(iCol) =
+        physics_sfcprop % albdirvis_lnd(iCol) = sfc_albedo(iCol)
+        physics_sfcprop % albdirnir_lnd(iCol) = sfc_albedo(iCol)
+        physics_sfcprop % albdifvis_lnd(iCol) = sfc_albedo(iCol)
+        physics_sfcprop % albdifnir_lnd(iCol) = sfc_albedo(iCol)
+        physics_sfcprop % emis_lnd(iCol) = sfc_emiss(iCol)
+        physics_sfcprop % emis_ice(iCol) = sfc_emiss(iCol)
         !physics_sfcprop % sncovr_ice(iCol) =
         !physics_sfcprop % snodi(iCol) =
         !physics_sfcprop % weasdi(iCol) =
@@ -1510,7 +1436,7 @@ contains
           re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)
           re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)
           re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)
-          ! Surface radiative properties
+          ! Surface radiative properties (*NOTE* These are the base albedo/emissivity before LSM)
           sfc_albedo(iCol) = radiation%sfalb(iCol)
           sfc_emiss(iCol)  = radiation%semis(iCol)
           ! Gravity-wave physics diagnostics (conditionally allocated)
@@ -1708,5 +1634,276 @@ contains
                                                  +  edgeNormalVectors(3,iEdge) * north(3,cell2))
     end do
   end subroutine tend_toEdges
+
+  !> ########################################################################################
+  !> Procedure to compute hydrostatic pressure for the physics from the MPAS state.
+  !>
+  !> ########################################################################################
+  subroutine ufs_mpas_hydrostatic_pressure(physics_state, qv)
+    use mpas_log,             only : mpas_log_write
+    use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
+    use mpas_derived_types,   only : mpas_pool_type
+    use mpas_pool_routines,   only : mpas_pool_get_dimension, mpas_pool_get_array, mpas_pool_get_subpool
+    use GFS_typedefs,         only : GFS_statein_type
+    use mpas_constants,       only : gravity
+
+    type(GFS_statein_type), intent(inout) :: physics_state
+    real(kind=RKIND), intent(in) :: qv(:,:)
+    !
+    type(mpas_pool_type), pointer :: diag_pool, mesh_pool, state_pool
+    integer, pointer :: nThreads,  nCellsSolve, nVertLevels
+    integer, pointer :: cellSolveThreadStart(:), cellSolveThreadEnd(:)
+    integer :: iCol, ithread, iLay
+    real(kind=RKIND) :: tem1, fzm_p, fzp_p, z0, z1, z2, w1, w2, rho_a
+    real(kind=RKIND), pointer :: prsi(:,:), prsl(:,:), rho(:,:), exner(:,:), pressure_b(:,:)
+    real(kind=RKIND), pointer :: pressure_p(:,:), zgrid(:,:), mass(:,:), zz(:,:)
+    character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_hydrostatic_pressure'
+
+    call mpas_log_write(subname //'   Computing hydrostatic pressure for physics ', messageType=MPAS_LOG_WARN)
+
+    ! Get openMP information
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadStart', cellSolveThreadStart)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadEnd',   cellSolveThreadEnd)
+
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag',  diag_pool)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', state_pool)
+
+    ! Get MPAS dimensions
+    call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
+    call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
+
+    call mpas_pool_get_array(diag_pool,  'exner',         exner)
+    call mpas_pool_get_array(diag_pool,  'pressure_base', pressure_b)
+    call mpas_pool_get_array(diag_pool,  'pressure_p',    pressure_p)
+    call mpas_pool_get_array(mesh_pool,  'zgrid',         zgrid)
+    call mpas_pool_get_array(state_pool, 'rho_zz',        mass,   1)
+    call mpas_pool_get_array(mesh_pool,  'zz',            zz)
+
+    allocate(prsl(nCellsSolve, nVertLevels))
+    allocate(prsi(nCellsSolve, nVertLevels + 1))
+    allocate(rho( nCellsSolve, nVertLevels))
+
+    ! Pressure (non-hydrostatic)
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          do iLay = 1,nVertLevels
+             rho(iCol,iLay) = zz(iLay,iCol) * mass(iLay,iCol)
+             prsl(iCol,iLay) = pressure_p(iLay,iCol) + pressure_b(iLay,iCol)
+          end do
+       end do
+    end do
+
+    ! Interpolation of pressure and temperature from layer-center to layer-interface
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          do iLay = 2,nVertLevels
+             tem1 = 1./(zgrid(iLay+1,iCol)-zgrid(iLay-1,iCol))
+             fzm_p = (zgrid(iLay,  iCol)-zgrid(iLay-1,iCol)) * tem1
+             fzp_p = (zgrid(iLay+1,iCol)-zgrid(iLay,  iCol)) * tem1
+             physics_state % tgri(iCol,iLay) = fzm_p*physics_state % tgrs(iCol,iLay) + fzp_p*physics_state % tgrs(iCol,iLay-1)
+             prsi(iCol,iLay) = fzm_p*prsl(iCol,iLay) + fzp_p*prsl(iCol,iLay-1)
+          enddo
+       enddo
+    enddo
+
+    ! Interpolation of pressure and temperature to the top-of-the-model
+    iLay = nVertLevels + 1
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          z0 = zgrid(iLay,iCol)
+          z1 = 0.5*(zgrid(iLay  ,iCol)+zgrid(iLay-1,iCol))
+          z2 = 0.5*(zgrid(iLay-1,iCol)+zgrid(iLay-2,iCol))
+          w1 = (z0-z2)/(z1-z2)
+          w2 = 1.-w1
+          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay-1) + w2*physics_state % tgrs(iCol,iLay-2)
+          prsi(iCol,iLay) = exp(w1*log(prsl(iCol,iLay-1))+w2*log(prsl(iCol,iLay-2)))
+       end do
+    end do
+
+    ! Recalculate the pressure and temperature  at the surface as an extrapolation of
+    ! the pressures in the 2 layers above the surface.
+    iLay = 1
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          z0 = zgrid(iLay,iCol)
+          z1 = 0.5*(zgrid(iLay  ,iCol)+zgrid(iLay+1,iCol))
+          z2 = 0.5*(zgrid(iLay+1,iCol)+zgrid(iLay+2,iCol))
+          w1 = (z0-z2)/(z1-z2)
+          w2 = 1.-w1
+          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay) + w2*physics_state % tgrs(iCol,iLay+1)
+          prsi(iCol,iLay) = w1*prsl(iCol,iLay)+w2*prsl(iCol,iLay+1)
+       end do
+    end do
+
+    ! Calculation of the hydrostatic pressure
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          ! Pressure at layer-interfaces
+          iLay = nVertLevels + 1
+          physics_state % prsi(iCol,iLay) = prsi(iCol,iLay)
+          do iLay = nVertLevels,1,-1
+             rho_a = rho(iCol,iLay) / (1.+qv(iLay,iCol))
+             physics_state % prsi(iCol,iLay)  = physics_state % prsi(iCol,iLay+1) + &
+                  gravity*rho_a*physics_state % dzgrid(iCol,iLay)
+          end do
+          ! Pressure at layer-centers
+          do iLay = nVertLevels,1,-1
+             physics_state % prsl(iCol,iLay) = 0.5*(physics_state % prsi(iCol,iLay+1) + physics_state % prsi(iCol,iLay) )
+          end do
+          ! Pressure layer thickness
+          do iLay = 1,nVertLevels
+             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
+          end do
+          ! Pressure difference across layer-centers
+          physics_state % dp(iCol,1) = physics_state % prsi(iCol,1) - physics_state % prsi(iCol,2)
+          do iLay = 2,nVertLevels
+             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
+             physics_state % dpc(iCol,iLay)  = physics_state % prsl(iCol,iLay-1) - physics_state % prsl(iCol,iLay)
+          end do
+          physics_state % dpc(iCol,1)  = physics_state % prsi(iCol,1) - physics_state % prsl(iCol,1)
+          ! Surface pressure
+          physics_state % pgr(iCol) = physics_state % prsi(iCol,1)
+       end do
+    end do
+
+    call mpas_log_write(subname //'   Finished computing hydrostatic pressure for physics ', messageType=MPAS_LOG_WARN)
+
+  end subroutine ufs_mpas_hydrostatic_pressure
+
+  !> ########################################################################################
+  !> Procedure to interpolate monthly surface data for current day.
+  !>
+  !> ########################################################################################
+  subroutine ufs_mpas_surface_update(day, month)
+    use mpas_log,             only : mpas_log_write
+    use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
+    use mpas_derived_types,   only : mpas_pool_type
+    use mpas_pool_routines,   only : mpas_pool_get_dimension, mpas_pool_get_array, mpas_pool_get_subpool
+
+    integer, intent(in) :: day, month
+    !
+    integer, pointer :: nCellsSolve, landmask(:)
+    real(RKIND), pointer :: sfc_albbck(:), albedo12m(:,:), sfc_albedo(:), wt1, wt2
+    type(mpas_pool_type), pointer :: sfc_input, diag_phys, mesh
+    integer, parameter, dimension(12) :: mmd = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    integer ::  iCell, m1, m2
+    character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_surface_update'
+
+    !
+    call mpas_log_write(subname //'   Updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
+
+    ! Determine temporal interpoaltion indices.
+    wt1 = 0.5
+    wt2 = 0.5
+    if (day > 15) then
+       m1 = month
+       m2 = month + 1
+       if (month == 12) m2 = 1
+       wt1 = 1. - (day - 15.)/real(mmd(m2),kind=RKIND)
+       wt2 = 1. - wt1
+    else
+       m1 = month - 1
+       m2 = month
+       if (month == 1) m1 = 12
+       wt1 = (15. - day)/real(mmd(m1),kind=RKIND)
+       wt2 = 1. - wt1
+    endif
+
+    ! Access MPAS data pools.
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input', sfc_input)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', mesh)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
+
+    ! Dimensions
+    call mpas_pool_get_dimension(mesh,'nCellsSolve',nCellsSolve)
+
+    ! Arrays
+    call mpas_pool_get_array(sfc_input,'landmask'  , landmask  )
+    call mpas_pool_get_array(sfc_input,'albedo12m' , albedo12m )
+    call mpas_pool_get_array(sfc_input,'sfc_albbck', sfc_albbck)
+    call mpas_pool_get_array(sfc_input,'sfc_albedo', sfc_albedo)
+
+    ! Update background surface albedo
+    do iCell = 1, nCellsSolve
+       sfc_albbck(iCell) = wt1*albedo12m(m1,iCell) + wt2*albedo12m(m2,iCell)
+       sfc_albbck(iCell) = sfc_albbck(iCell) / 100.
+       if(landmask(iCell) .eq. 0) sfc_albbck(iCell) = 0.08
+    enddo
+
+    !
+    call mpas_log_write(subname //'   Finished updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
+ end subroutine ufs_mpas_surface_update
+
+ !> ########################################################################################
+ !> Procedure to update surface boundary conditions with input SST and fractional sea-ice
+ !> coverage.
+ !> ########################################################################################
+ subroutine ufs_mpas_sst_update()
+   use mpas_derived_types,   only : mpas_pool_type
+   use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension
+   use mpas_log,             only : mpas_log_write
+   use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
+   use mpas_pool_routines,   only : mpas_pool_get_array, mpas_pool_get_config
+   implicit none
+   logical,pointer :: config_frac_seaice
+   integer :: iCell
+   integer,pointer :: nCells
+   type(mpas_pool_type), pointer :: sfc_input, diag_phys, mesh
+   real(kind=RKIND), pointer :: sfc_albedo(:), sfc_emiss(:), xice(:), xicem(:)
+   real(kind=RKIND) :: xice_threshold
+   character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_sst_update'
+
+   call mpas_log_write(subname //'   Updating MPAS surface(sst) properties', messageType=MPAS_LOG_WARN)
+
+   ! Access MPAS data pools.
+   call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
+   call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',         mesh)
+   call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input',    sfc_input)
+
+   ! Dimensions
+   call mpas_pool_get_dimension(mesh,'nCells',nCells)
+   call mpas_pool_get_config( domain_ptr % blocklist % configs, 'config_frac_seaice', config_frac_seaice)
+
+   ! Arrays
+   call mpas_pool_get_array(sfc_input,'sfc_albedo', sfc_albedo)
+   call mpas_pool_get_array(sfc_input,'sfc_emiss',  sfc_emiss)
+   call mpas_pool_get_array(diag_phys,'xicem',      xicem)
+   call mpas_pool_get_array(sfc_input,'xice',       xice)
+
+   if(.not. config_frac_seaice) then
+      xice_threshold = 0.5_RKIND
+   elseif(config_frac_seaice) then
+      xice_threshold = 0.02
+   endif
+
+   if(config_frac_seaice) then
+      do iCell = 1,nCells
+         if(xice(iCell) < xice_threshold) xice(iCell) = 0._RKIND
+      enddo
+    elseif(.not.config_frac_seaice) then
+       do iCell = 1,nCells
+          if(xice(iCell) >= xice_threshold) then
+             xice(iCell) = 1._RKIND
+          else
+             xice(iCell) = 0._RKIND
+          endif
+       enddo
+    endif
+
+    !update the surface albedo and surface emissivity. before updating xice, sfc_albedo and sfc_emiss
+    !are valid according to the earlier value of xice, xicem. now that xice has been updated, we also
+    !update sfc_albedo and sfc_emiss accordingly:
+    if(config_frac_seaice) then
+       do iCell = 1, nCells
+          if(xice(iCell) /= xicem(iCell) .and. xicem(iCell) >= xice_threshold) then
+             sfc_albedo(iCell) = 0.08 + (sfc_albedo(iCell) -0.08) * xice(iCell)/xicem(iCell)
+             sfc_emiss(iCell)  = 0.98 + (sfc_emiss(iCell)-0.98  ) * xice(iCell)/xicem(iCell)
+          endif
+       enddo
+    endif
+
+ end subroutine ufs_mpas_sst_update
 
 end module atmos_coupling_mod
