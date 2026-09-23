@@ -1652,7 +1652,7 @@ contains
     integer, pointer :: nThreads,  nCellsSolve, nVertLevels
     integer, pointer :: cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer :: iCol, ithread, iLay
-    real(kind=RKIND) :: tem1, fzm_p, fzp_p, z0, z1, z2, w1, w2, rho_a
+    real(kind=RKIND) :: tem1, fzm_p, fzp_p, z0, z1, z2, w1, w2, rho_moist
     real(kind=RKIND), pointer :: prsi(:,:), prsl(:,:), rho(:,:), exner(:,:), pressure_b(:,:)
     real(kind=RKIND), pointer :: pressure_p(:,:), zgrid(:,:), mass(:,:), zz(:,:)
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_hydrostatic_pressure'
@@ -1742,9 +1742,9 @@ contains
           iLay = nVertLevels + 1
           physics_state % prsi(iCol,iLay) = prsi(iCol,iLay)
           do iLay = nVertLevels,1,-1
-             rho_a = rho(iCol,iLay) / (1.+qv(iLay,iCol))
+             rho_moist = rho(iCol,iLay) * (1.+qv(iLay,iCol)) ! Moist-density
              physics_state % prsi(iCol,iLay)  = physics_state % prsi(iCol,iLay+1) + &
-                  gravity*rho_a*physics_state % dzgrid(iCol,iLay)
+                  gravity*rho_moist*physics_state % dzgrid(iCol,iLay)
           end do
           ! Pressure at layer-centers
           do iLay = nVertLevels,1,-1
