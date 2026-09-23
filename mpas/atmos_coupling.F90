@@ -793,10 +793,8 @@ contains
     nullify(mesh_pool)
     nullify(state_pool)
 
-    ! DJS:  Update hydrostatic pressure after dynamics, before MP?
-
-    ! GJF: Remove microphysics heating from state before calling microphysics. This is done
-    ! at line 3317 of mpas_atm_time_integration.F/atm_recover_large_step_variables_work.
+    ! Update hydrostatic pressure.
+    call ufs_mpas_hydrostatic_pressure(physics_statein, tracers(index_qv,:,:))
 
   end subroutine ufs_mpas_to_microphysics
 
@@ -1840,6 +1838,7 @@ contains
  !> ########################################################################################
  !> Procedure to update surface boundary conditions with input SST and fractional sea-ice
  !> coverage.
+ !> NOT YET IMPLEMENTED
  !> ########################################################################################
  subroutine ufs_mpas_sst_update()
    use mpas_derived_types,   only : mpas_pool_type
