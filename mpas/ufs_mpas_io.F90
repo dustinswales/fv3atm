@@ -904,7 +904,7 @@ contains
    use mpas_derived_types,     only : mpas_pool_type
    use mpas_kind_types,        only : RKIND
    use mpas_vector_operations, only : mpas_initialize_vectors
-   use module_mpas_config, only : nCellsSolve, latCell, lonCell
+   use module_mpas_config,     only : latCell, lonCell
    
    type (mpas_pool_type), pointer :: meshPool
    real(kind=RKIND), dimension(:,:), pointer :: east, north

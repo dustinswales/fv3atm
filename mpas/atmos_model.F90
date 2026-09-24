@@ -7,7 +7,7 @@
 module atmos_model_mod
   use esmf
   use mpi_f08
-  ! MPAS
+  ! MPAS 
   use MPAS_typedefs,         only : MPAS_kind_phys => kind_phys
   use mpas_kind_types,       only : RKIND
   use ufs_mpas_constituents, only : constituent_name, is_water_species, constituent_type
@@ -85,7 +85,8 @@ module atmos_model_mod
        stream_list_diag, constituents_file
 
   ! Component Timers
-  real(MPAS_kind_phys) :: setupClock, atmiClock, radClock, physClock,mpasClock, mpClock, outClock
+  real(MPAS_kind_phys) :: setupClock = 0., atmiClock = 0., radClock = 0., physClock = 0., &
+                          mpasClock = 0., mpClock = 0., outClock = 0.
 
 contains
   !> #########################################################################################
@@ -118,8 +119,9 @@ contains
     type(ESMF_Time),          intent(in   ) :: CurrTime, StartTime, StopTime
 
     ! Locals
-    integer :: i, io, ierr, sec, iCol, mpi_size, mpi_rank, rc, dt_dyn, dt_phys
-    integer :: times(6), timee(6), ttime, logUnits(2), nthrds, me, master, nlevs
+    integer :: ierr,  rc, dt_dyn, dt_phys
+    integer :: times(6), timee(6), ttime,  nthrds, me, master, nlevs
+    integer :: logUnits(2)=-1
     ! Horizontal-resolution proxy (lonr/latr) and dycore-neutral reference pressure
     ! profile (p_ref) for UGWPv1 under MPAS; see the block below and MPAS_init.F90.
     ! p_ref is built in MPAS's own RKIND (matching ufs_mpas_reference_pressure) and
@@ -319,7 +321,7 @@ contains
     call ufs_mpas_grid_to_physics(UFSATM_grid)
     call ufs_mpas_sfc_to_physics(UFSATM_sfcprop, UFSatm_control)
     call ufs_mpas_gwd_to_physics(UFSATM_control, UFSATM_sfcprop)
-    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_sfcprop, UFSATM_radtend)
+    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_stateout, UFSATM_sfcprop, UFSATM_radtend, mpas_from_ufs_cnst)
 
     ! Register CCPP
     call CCPP_step (step="register", nblks=Atmos % nblks, ierr=ierr, dycore='mpas')
@@ -403,7 +405,7 @@ contains
     endif
 
     ! Populate physics inputs with MPAS data.
-    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_sfcprop, UFSATM_radtend)
+    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_stateout, UFSATM_sfcprop, UFSATM_radtend, mpas_from_ufs_cnst)
 
     ! Call CCPP Timestep_initialize Group
     start_time = MPI_Wtime()
@@ -432,7 +434,7 @@ contains
     call ufs_mpas_phys_diag(UFSATM_control, UFSATM_radtend, UFSATM_intdiag, UFSATM_tbd)
 
     ! Prepare MPAS dycore inputs with CCPP physics outputs.
-    call ufs_physics_to_mpas(UFSATM_stateout)
+    call ufs_physics_to_mpas(UFSATM_stateout, mpas_from_ufs_cnst)
 
   end subroutine atmos_model_radiation_physics
 
@@ -444,7 +446,6 @@ contains
     use ufs_mpas_subdriver, only : ufs_mpas_run
 
     type (atmos_control_type), intent(inout) :: Atmos
-    real(MPAS_kind_phys) :: start_time, stop_time
 
     ! Call MPAS dycore
     call ufs_mpas_run(mpasClock, outClock, debug, phys_diag)
@@ -464,7 +465,7 @@ contains
     real(MPAS_kind_phys) :: start_time, stop_time
 
     ! Prepare CCPP microphysics inputs with MPAS dycore outputs.
-    call ufs_mpas_to_microphysics(UFSATM_stateout, UFSATM_statein)
+    call ufs_mpas_to_microphysics(UFSATM_stateout, UFSATM_statein, mpas_from_ufs_cnst)
 
     ! Call CCPP Microphysics Group
     ! NOT YET IMPLEMENTED in SDF
@@ -482,7 +483,7 @@ contains
     setupClock = setupClock + (stop_time - start_time)
 
     ! Prepare MPAS dycore inputs with CCPP physics outputs.
-    call ufs_microphysics_to_mpas(UFSATM_stateout)
+    call ufs_microphysics_to_mpas(UFSATM_stateout, mpas_from_ufs_cnst)
 
     UFSATM_control % first_time_step = .false.
 
@@ -515,7 +516,7 @@ contains
     logical, intent(in) :: debug
     integer, intent(out) :: ierr, nvars, nvarsw
     type(xml_node) :: root, variable
-    integer :: i, ivar, ivarw
+    integer :: ivar, ivarw
     character(len=200) :: name, standard_name, units, type, kind, allocatble, dimensions
     character(len=200) :: water_species
     character(len=*), parameter :: subname = 'atmos_model:get_tracers'

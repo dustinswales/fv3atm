@@ -1,4 +1,4 @@
-!> ###########################################################################################
+!> ########################################################################################### 
 !> \file ufs_mpas_subdriver.F90
 !> UFSATM subdriver for MPAS dynamical core.
 !>
@@ -65,7 +65,7 @@ contains
     use mpas_bootstrapping,         only : mpas_bootstrap_framework_phase1
     use mpas_bootstrapping,         only : mpas_bootstrap_framework_phase2
     use mpas_stream_inquiry,        only : mpas_stream_inquiry_new_streaminfo
-    use mpas_derived_types,         only : mpas_pool_type, mpas_IO_NETCDF, field3dReal
+    use mpas_derived_types,         only : mpas_pool_type, mpas_IO_NETCDF
     use mpas_derived_types,         only : MPAS_STREAM_MGR_NOERR
     use mpas_kind_types,            only : StrKIND, RKIND
     use atm_core_interface,         only : atm_setup_core, atm_setup_domain
@@ -89,11 +89,9 @@ contains
     integer,          intent(  out) :: nlevs, dt_dycore
     ! Locals
     character(len=*), parameter :: subname = 'ufs_mpas_subdriver::ufs_mpas_init'
-    integer :: i, ndate1, ndate2, tod, ierr, ik, kk
-    type (mpas_pool_type), pointer :: state, mesh, tend, lbc
-    type (field3dReal), pointer :: scalarsField
-    character (len=StrKIND), pointer :: initial_time, config_start_time
-    integer, pointer :: num_scalars, mpas_from_ufs_cnst2(:), ufs_from_mpas_cnst2(:)
+    integer :: ndate1, ndate2, tod, ierr
+    type (mpas_pool_type), pointer :: state, mesh, lbc
+    integer, pointer :: num_scalars
     logical, pointer :: config_apply_lbcs
     logical :: file_exists
 
@@ -127,7 +125,12 @@ contains
     ! 3) *_setup_core to assign the setup_log function pointer
     domain_ptr % core % git_version = 'unknown'
     domain_ptr % core % build_target = 'N/A'
-    ierr = domain_ptr % core % setup_log(domain_ptr % logInfo, domain_ptr, unitNumbers=logUnits)
+    !ierr = domain_ptr % core % setup_log(domain_ptr % logInfo, domain_ptr, unitNumbers=logUnits)
+    if (me == master) then
+       ierr = domain_ptr % core % setup_log(domain_ptr % logInfo, domain_ptr, unitNumbers=logUnits)
+    else
+       ierr = domain_ptr % core % setup_log(domain_ptr % logInfo, domain_ptr)
+    end if
     if ( ierr /= 0 ) then
        call mpas_log_write(subname // " Log setup failed for MPAS-A dycore", messageType=MPAS_LOG_CRIT)
     end if
@@ -307,7 +310,7 @@ contains
   subroutine ufs_mpas_atm_core_init(debug, nlevs, dt_dycore)
     use mpas_kind_types,            only : StrKIND, RKIND
     use mpas_derived_types,         only : mpas_pool_type, mpas_Time_Type, field0DReal, field2dreal
-    use mpas_derived_types,         only : block_type, field3dreal, MPAS_STREAM_MGR_NOERR
+    use mpas_derived_types,         only : MPAS_STREAM_MGR_NOERR
     use mpas_domain_routines,       only : mpas_pool_get_dimension
     use mpas_pool_routines,         only : mpas_pool_get_subpool
     use mpas_pool_routines,         only : mpas_pool_initialize_time_levels, mpas_pool_get_config
@@ -326,22 +329,18 @@ contains
     ! Arguments
     logical,                 intent(in   ) :: debug
     integer,                 intent(out  ) :: nlevs, dt_dycore
-    type(mpas_pool_type), pointer :: tend_physics_pool
     ! Locals
     character(len=*), parameter :: subname = 'ufs_mpas_subdriver::ufs_mpas_atm_core_init'
-    type (mpas_pool_type), pointer :: state, mesh, diag
+    type (mpas_pool_type), pointer :: state, mesh
     integer :: ierr
     integer, pointer :: nVertLevels1, maxEdges1, maxEdges2, num_scalars
     real (kind=RKIND), pointer :: dt
-    type (block_type), pointer :: block
     logical, pointer :: config_do_restart
     type (mpas_Time_Type) :: startTime
     character(len=StrKIND) :: startTimeStamp
     character (len=StrKIND), pointer :: xtime
     character (len=StrKIND), pointer :: initial_time1, initial_time2
-    real(RKIND), dimension(:,:,:), pointer :: field_3d_real
     logical, pointer :: config_apply_lbcs
-    real(RKIND), dimension(:,:), pointer :: theta1
     type(field2dreal), pointer :: field_2d_real
 
     !
@@ -551,13 +550,12 @@ contains
     character(len=*), parameter :: subname = 'ufs_mpas_run::ufs_mpas_run'
     real (kind=RKIND), pointer :: config_dt
     type (mpas_pool_type), pointer :: state, diag, mesh
-    type (mpas_Time_type) :: timeNow, timeStop,timeLBCnew
+    type (mpas_Time_type) :: timeNow, timeStop
     character(len=StrKIND) :: timeStamp, timeStampOutFile
-    integer :: ierr, itime, itimestep, iout
+    integer :: ierr, itimestep
     real (kind=R8KIND) :: integ_start_time, integ_stop_time
     logical, pointer :: config_apply_lbcs
-    type(mpas_timeinterval_type) :: mpas_time_interval, mpas_output_interval, mpas_restart_interval
-    real (kind=RKIND), dimension(:,:,:), pointer :: scalars
+    type(mpas_timeinterval_type) :: mpas_time_interval
     real (kind=RKIND) :: start_time, stop_time
     integer, save :: ncall_dyn = 0
     integer :: diag_unit
@@ -864,7 +862,7 @@ contains
     real(RKIND)            :: config_relax_zone_divdamp_coef = 6
 
     ! Locals
-    integer :: ierr, io, mpierr
+    integer :: io, mpierr
     character(len=*), parameter :: subname = 'ufs_mpas_subdriver::read_mpas_namelist'
     logical :: file_exists
 

@@ -33,8 +33,10 @@ contains
   !> CCPP "state" needed by the physics.
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_to_physics(physics_state, surface_state, radiation)
-    use GFS_typedefs,         only : GFS_statein_type, GFS_sfcprop_type, GFS_radtend_type
+  subroutine ufs_mpas_to_physics(physics_state, physics_stateout, surface_state, radiation,  &
+       mpas_from_ufs_cnst)
+    use GFS_typedefs,         only : GFS_sfcprop_type, GFS_radtend_type
+    use GFS_typedefs,         only : GFS_statein_type, GFS_stateout_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
     use atm_core,             only : atm_compute_output_diagnostics
@@ -42,16 +44,16 @@ contains
 
     ! Arguments
     type(GFS_statein_type),   intent(inout) :: physics_state
+    type(GFS_stateout_type),  intent(inout) :: physics_stateout
     type(GFS_sfcprop_type),   intent(inout) :: surface_state
     type(GFS_radtend_type),   intent(inout) :: radiation
-
+    integer, pointer,         intent(in   ) :: mpas_from_ufs_cnst(:)
     ! Locals
     type(mpas_pool_type), pointer :: state_pool, diag_pool, mesh_pool, diag_phys
     integer :: iCol, iLay, iTracer, ithread
     integer, pointer :: nCellsSolve, num_scalars, nVertLevels, index_qv
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
-    real(kind=RKIND) :: rho1, rho2, tem1, tem2, theta, fzm_p, fzp_p, z0, z1, z2, w1, w2,rho_a
-    real(kind=RKIND), pointer :: qv(:,:), qc(:,:), qr(:,:), qi(:,:), qs(:,:), qg(:,:)
+    real(kind=RKIND) :: rho1, rho2, tem1, tem2, theta
     real(kind=RKIND), pointer :: ux(:,:), uy(:,:), theta_m(:,:), rho_zz(:,:), zgrid(:,:), zz(:,:)
     real(kind=RKIND), pointer :: exner(:,:), tracers(:,:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND), pointer :: w(:,:), surface_pressure(:), rho(:,:)
@@ -102,7 +104,7 @@ contains
           do iLay = 1,nVertLevels
              ! Scalars (tracer,layer,col) -> (col,layer,tracer)
              do iTracer = 1,num_scalars
-                physics_state % qgrs(iCol,iLay,iTracer) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
              end do
 
              ! Air denisty (rho) (TODO: Pass to CCPP Physics)
@@ -145,9 +147,9 @@ contains
              physics_state % dzgrid(iCol,iLay-1) = zgrid(iLay,iCol) - zgrid(iLay-1,iCol)
           end do
 
-          ! Set surface temperature to lowest level temperature (revisit for coupling)
-          theta = theta_m(1,iCol) / (1._RKIND + rvord * tracers(index_qv,1,iCol))
-          surface_state % tsfc(iCol) = theta*exner(1,iCol)
+!          ! Set surface temperature to lowest level temperature (revisit for coupling)
+!          theta = theta_m(1,iCol) / (1._RKIND + rvord * tracers(index_qv,1,iCol))
+!          surface_state % tsfc(iCol) = theta*exner(1,iCol)
           !
           ! Surface radiative properties
           ! DJS2026:
@@ -176,7 +178,25 @@ contains
        end do
     end do
 
+    ! Compute hydrostatic pressure
     call ufs_mpas_hydrostatic_pressure(physics_state, tracers(index_qv,:,:))
+
+    ! DJS: Why do some process-split schemes use one temperature (air_temperature) stored
+    !      in GFS_stateout, while others use one (physics_timestep_initial_air_temperature)
+    !      stored in GFS_statein?
+    !      Shouldn't all schemes use "air_temperature"?
+    !      "air_temperature" = "physics_timestep_initial_air_temperature" until the state is
+    !      updated?
+    physics_stateout % gt0(:,:)   = physics_state % tgrs(:,:)
+    physics_stateout % gq0(:,:,:) = physics_state % qgrs(:,:,:)
+    physics_stateout % gu0(:,:)   = physics_state % ugrs(:,:)
+    physics_stateout % gv0(:,:)   = physics_state % vgrs(:,:)
+
+    ! Reset tendencies for clean accumulation of the (process-split) physics group tendencies.
+    physics_stateout % dtdt(:,:)   = 0._RKIND
+    physics_stateout % dqdt(:,:,:) = 0._RKIND
+    physics_stateout % dudt(:,:)   = 0._RKIND
+    physics_stateout % dvdt(:,:)   = 0._RKIND
 
     ! Housekeeping
     deallocate (rho)
@@ -201,7 +221,7 @@ contains
   !> pool, we use tendencies from the CCPP Physics data containers.
   !>
   !> #########################################################################################
-  subroutine ufs_physics_to_mpas(physics_state)
+  subroutine ufs_physics_to_mpas(physics_state, mpas_from_ufs_cnst)
     use GFS_typedefs,       only : GFS_stateout_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
@@ -209,6 +229,7 @@ contains
 
     ! Arguments
     type(GFS_stateout_type), intent(in) :: physics_state
+    integer, pointer,        intent(in) :: mpas_from_ufs_cnst(:)
 
     ! Locals
     type(mpas_pool_type),  pointer :: state_pool, mesh_pool, tend_pool, diag_pool, tend_phys
@@ -231,7 +252,7 @@ contains
     integer, pointer :: index_nifa => null()
     integer, pointer :: index_nwfa => null()
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
-    integer :: iCol,iLay,ithread,iScalar
+    integer :: iCol,iLay,ithread
     real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
     logical :: debug=.false.
     integer, save :: ncall_p2m = 0
@@ -570,7 +591,7 @@ contains
   !> Additionally, update any other fields needed by the dynamics (e.g., theta_m, rtheta_p)
   !>
   !> #########################################################################################
-  subroutine ufs_microphysics_to_mpas(physics_state)
+  subroutine ufs_microphysics_to_mpas(physics_state, mpas_from_ufs_cnst)
     use GFS_typedefs,       only : GFS_stateout_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array
@@ -578,7 +599,8 @@ contains
     use mpas_constants,     only : gravity, rvord, rv, rgas, p0, cp
 
     ! Arguments
-    type(GFS_stateout_type),     intent(in   ) :: physics_state
+    type(GFS_stateout_type), intent(in) :: physics_state
+    integer, pointer,        intent(in) :: mpas_from_ufs_cnst(:)
 
     ! Locals
     type(mpas_pool_type), pointer :: diag_pool, mesh_pool, state_pool, tend_pool
@@ -650,7 +672,7 @@ contains
 
           ! Scalars (col,layer,tracer) -> (tracer,layer,col)
           do iTracer = 1,num_scalars
-            tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + config_dt * physics_state % dqdt(iCol,iLay,iTracer))
+            tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + config_dt * physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer)))
           end do
 
           ! update the virtual temperature coefficient with updated qv
@@ -676,22 +698,6 @@ contains
         end do
       end do
     end do
-
-    ! write(*,*) 'num_scalars',num_scalars
-    ! if (associated(index_qv)) write(*,*) 'mean max/min ten qv',sum(tracers(index_qv,:,:)) / real(size(tracers(index_qv,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qv)), config_dt*minval(physics_state % ten_q(:,:,index_qv))
-    ! if (associated(index_qc)) write(*,*) 'mean max/min ten qc',sum(tracers(index_qc,:,:)) / real(size(tracers(index_qc,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qc)), config_dt*minval(physics_state % ten_q(:,:,index_qc))
-    ! if (associated(index_qi)) write(*,*) 'mean max/min ten qi',sum(tracers(index_qi,:,:)) / real(size(tracers(index_qi,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qi)), config_dt*minval(physics_state % ten_q(:,:,index_qi))
-    ! if (associated(index_qr)) write(*,*) 'mean max/min ten qr',sum(tracers(index_qr,:,:)) / real(size(tracers(index_qr,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qr)), config_dt* minval(physics_state % ten_q(:,:,index_qr))
-    ! if (associated(index_qs)) write(*,*) 'mean max/min ten qs',sum(tracers(index_qs,:,:)) / real(size(tracers(index_qs,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qs)), config_dt*minval(physics_state % ten_q(:,:,index_qs))
-    ! if (associated(index_qg)) write(*,*) 'mean max/min ten qg',sum(tracers(index_qg,:,:)) / real(size(tracers(index_qg,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_qg)), config_dt*minval(physics_state % ten_q(:,:,index_qg))
-    ! if (associated(index_nc)) write(*,*) 'mean max/min ten nc',sum(tracers(index_nc,:,:)) / real(size(tracers(index_nc,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_nc)), config_dt*minval(physics_state % ten_q(:,:,index_nc))
-    ! if (associated(index_ni)) write(*,*) 'mean max/min ten ni',sum(tracers(index_ni,:,:)) / real(size(tracers(index_ni,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_ni)), config_dt*minval(physics_state % ten_q(:,:,index_ni))
-    ! if (associated(index_nr)) write(*,*) 'mean max/min ten nr',sum(tracers(index_nr,:,:)) / real(size(tracers(index_nr,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_nr)), config_dt*minval(physics_state % ten_q(:,:,index_nr))
-    ! if (associated(index_ns)) write(*,*) 'mean max/min ten ns',sum(tracers(index_ns,:,:)) / real(size(tracers(index_ns,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_ns)), config_dt*minval(physics_state % ten_q(:,:,index_ns))
-    ! if (associated(index_ng)) write(*,*) 'mean max/min ten ng',sum(tracers(index_ng,:,:)) / real(size(tracers(index_ng,:,:))),config_dt*maxval(physics_state %ten_q(:,:,index_ng)), config_dt*minval(physics_state % ten_q(:,:,index_ng))
-    ! if (associated(index_nifa)) write(*,*) 'mean max/min ten nifa',sum(tracers(index_nifa,:,:)) / real(size(tracers(index_nifa,:,:))), config_dt*maxval(physics_state % ten_q(:,:,index_nifa)), config_dt*minval(physics_state % ten_q(:,:,index_nifa))
-    ! if (associated(index_nwfa)) write(*,*) 'mean max/min ten nwfa',sum(tracers(index_nwfa,:,:)) /real(size(tracers(index_nwfa,:,:))),config_dt*maxval(physics_state % ten_q(:,:,index_nwfa)), config_dt*minval(physics_state % ten_q(:,:,index_nwfa))
-
 
     ! Calculation of the surface pressure using hydrostatic assumption down to the surface.
     ! (from mpas_atmphys_interface.F:MPAS_to_physics())
@@ -721,7 +727,7 @@ contains
   !> Analogous to microphysics_from_MPAS in src/core_atmosphere/physics/mpas_atmphys_interface.F
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_to_microphysics(physics_state, physics_statein)
+  subroutine ufs_mpas_to_microphysics(physics_state, physics_statein, mpas_from_ufs_cnst)
     use GFS_typedefs,         only : GFS_stateout_type, GFS_statein_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
@@ -730,6 +736,7 @@ contains
     ! Arguments
     type(GFS_stateout_type), intent(inout) :: physics_state
     type(GFS_statein_type),  intent(inout) :: physics_statein
+    integer, pointer,        intent(in   ) :: mpas_from_ufs_cnst(:)
 
     ! Locals
     type(mpas_pool_type), pointer :: state_pool, diag_pool, mesh_pool
@@ -737,8 +744,8 @@ contains
     integer, pointer :: num_scalars, nVertLevels, nCellsSolve, index_qv
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     real(kind=RKIND), pointer :: rho_zz(:,:), theta_m(:,:), zz(:,:), zgrid(:,:), exner(:,:)
-    real(kind=RKIND), pointer :: tracers(:,:,:), rho(:,:), pressure_b(:,:), pressure_p(:,:), w(:,:)
-    real(kind=RKIND) :: theta, pres
+    real(kind=RKIND), pointer :: tracers(:,:,:), w(:,:)
+    real(kind=RKIND) :: theta, rho
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_microphysics'
 
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
@@ -754,28 +761,22 @@ contains
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_dimension(state_pool, 'index_qv',    index_qv)
 
-    call mpas_pool_get_array(state_pool, 'rho_zz',       rho_zz,  timeLevel=1)
-    call mpas_pool_get_array(state_pool, 'theta_m',      theta_m, timeLevel=1)
-    call mpas_pool_get_array(state_pool, 'scalars',      tracers, timeLevel=1)
-    call mpas_pool_get_array(state_pool, 'w',            w,       timeLevel=1)
-    call mpas_pool_get_array(mesh_pool,  'zz',           zz)
-    call mpas_pool_get_array(mesh_pool,  'zgrid',        zgrid)
-    call mpas_pool_get_array(diag_pool,  'exner',        exner)
-    call mpas_pool_get_array(diag_pool,  'pressure_base',pressure_b)
-    call mpas_pool_get_array(diag_pool,  'pressure_p'   ,pressure_p)
+    call mpas_pool_get_array(state_pool, 'rho_zz',  rho_zz,  timeLevel=1)
+    call mpas_pool_get_array(state_pool, 'theta_m', theta_m, timeLevel=1)
+    call mpas_pool_get_array(state_pool, 'scalars', tracers, timeLevel=1)
+    call mpas_pool_get_array(state_pool, 'w',       w,       timeLevel=1)
+    call mpas_pool_get_array(mesh_pool,  'zz',      zz)
+    call mpas_pool_get_array(mesh_pool,  'zgrid',   zgrid)
+    call mpas_pool_get_array(diag_pool,  'exner',   exner)
 
-    allocate(rho(nCellsSolve, nVertLevels))
     ! Update fields needed by microphysics...
     do ithread = 1,nThreads
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
           do iLay = 1,nVertLevels
              ! Scalars (tracer,layer,col) -> (col,layer,tracer)
              do iTracer = 1,num_scalars
-                physics_state % gq0(iCol,iLay,iTracer) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
              end do
-
-             ! Air denisty (rho) (TODO: Pass to CCPP Physics)
-             rho(iCol,iLay) = zz(iLay,iCol) * rho_zz(iLay,iCol)
 
              ! Potential temperature (theta_m -> theta)
              theta = theta_m(iLay,iCol) / (1._RKIND + rvord * max(0._RKIND,tracers(index_qv,iLay,iCol)))
@@ -784,17 +785,25 @@ contains
              physics_state % gt0(iCol,iLay) = theta*exner(iLay,iCol)
 
              ! Vertical velocity (w -> omega)
-             physics_statein % vvl(iCol,iLay) = -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho(iCol,iLay)*gravity
+             rho = zz(iLay,iCol) * rho_zz(iLay,iCol)
+             physics_statein % vvl(iCol,iLay) = -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho*gravity
           end do
        end do
     end do
-    deallocate(rho)
-    nullify(diag_pool)
-    nullify(mesh_pool)
-    nullify(state_pool)
 
     ! Update hydrostatic pressure.
     call ufs_mpas_hydrostatic_pressure(physics_statein, tracers(index_qv,:,:))
+
+    ! Reset tendencies for clean accumulation of ONLY the microphysics tendencies.
+    physics_state % dtdt(:,:)   = 0._RKIND
+    physics_state % dqdt(:,:,:) = 0._RKIND
+    physics_state % dudt(:,:)   = 0._RKIND
+    physics_state % dvdt(:,:)   = 0._RKIND
+
+    ! Houzekeeping
+    nullify(diag_pool)
+    nullify(mesh_pool)
+    nullify(state_pool)
 
   end subroutine ufs_mpas_to_microphysics
 
@@ -904,7 +913,7 @@ contains
     type(GFS_sfcprop_type),      intent(inout) :: physics_sfcprop
     ! Locals
     type(mpas_pool_type), pointer :: sfc_input, mesh, diag_phys
-    integer :: i, ierr, iCol, iLev, ithread
+    integer :: iCol, iLev, ithread
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer, pointer :: isltyp(:), ivgtyp(:), landmask(:), nSoilLevels
     real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
@@ -1103,7 +1112,7 @@ contains
     type(GFS_sfcprop_type), intent(inout) :: surface
     ! Locals
     type(mpas_pool_type), pointer :: mesh_pool, sfc_input
-    integer :: i, ierr, iCol, ithread
+    integer :: iCol, ithread
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     real(RKIND), pointer :: var2d(:), con(:), oa1(:), oa2(:), oa3(:), oa4(:)
     real(RKIND), pointer :: ol1(:), ol2(:), ol3(:), ol4(:)
@@ -1598,7 +1607,7 @@ contains
     real(kind=RKIND),intent(out),dimension(:,:):: U_tend
 
     ! locals
-    integer:: iCell,iEdge,k,j
+    integer:: iEdge
     integer:: cell1, cell2
     integer,pointer:: nCells,nCellsSolve,nEdges
     integer,dimension(:,:),pointer:: cellsOnEdge

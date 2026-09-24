@@ -49,7 +49,7 @@ contains
     use mpas_pool_routines,  only : mpas_pool_get_config, mpas_pool_get_subpool
     use mpas_pool_routines,  only : mpas_pool_shift_time_levels, mpas_pool_get_array
     use mpas_pool_routines,  only : mpas_pool_get_dimension
-    use module_mpas_config,  only : lbc_filename, pioid_lbc, pio_subsystem_lbc
+    use module_mpas_config,  only : pioid_lbc
 
     implicit none
 
@@ -300,7 +300,6 @@ contains
     type (block_type), pointer :: blockList
     integer, intent(out) :: ierr
 
-    character(len=StrKIND) :: input_interval
     logical, pointer :: config_apply_lbcs => null()
     integer, pointer :: nCellsSolve => null()
     type (mpas_pool_type), pointer :: meshPool => null()
