@@ -179,7 +179,7 @@ contains
     end do
 
     ! Compute hydrostatic pressure
-    call ufs_mpas_hydrostatic_pressure(physics_state, tracers(index_qv,:,:))
+    call ufs_mpas_hydrostatic_pressure(physics_state, tracers(index_qv,:,:),'physics')
 
     ! DJS: Why do some process-split schemes use one temperature (air_temperature) stored
     !      in GFS_stateout, while others use one (physics_timestep_initial_air_temperature)
@@ -609,7 +609,7 @@ contains
     integer, pointer :: index_qv => null()
     integer, pointer :: num_scalars, nVertLevels
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
-    real(kind=RKIND) :: rho1, rho2, tem1, tem2, coeff, rcv, theta_dyn
+    real(kind=RKIND) :: rho1, rho2, tem1, tem2, coeff, rcv, theta_dyn, qv_old
     real(kind=RKIND), pointer :: config_dt
     real(kind=RKIND), pointer :: tracers(:,:,:), rt_diabatic_tend(:,:), rho_zz(:,:), theta_m(:,:)
     real(kind=RKIND), pointer :: zz(:,:), zgrid(:,:), exner(:,:), exner_b(:,:), rtheta_b(:,:), theta(:,:)
@@ -669,7 +669,7 @@ contains
           coeff = (1._RKIND + rvord * tracers(index_qv,iLay,iCol))
           theta_dyn = theta_m(ilay,iCol)/coeff
           theta(iLay,iCol) = theta_dyn + config_dt * (physics_state % dtdt(iCol,iLay) / exner(iLay,iCol))
-
+          qv_old = tracers(index_qv,iLay,iCol)
           ! Scalars (col,layer,tracer) -> (tracer,layer,col)
           do iTracer = 1,num_scalars
             tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + config_dt * physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer)))
@@ -744,7 +744,7 @@ contains
     integer, pointer :: num_scalars, nVertLevels, nCellsSolve, index_qv
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     real(kind=RKIND), pointer :: rho_zz(:,:), theta_m(:,:), zz(:,:), zgrid(:,:), exner(:,:)
-    real(kind=RKIND), pointer :: tracers(:,:,:), w(:,:)
+    real(kind=RKIND), pointer :: tracers(:,:,:), w(:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND) :: theta, rho
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_microphysics'
 
@@ -768,6 +768,8 @@ contains
     call mpas_pool_get_array(mesh_pool,  'zz',      zz)
     call mpas_pool_get_array(mesh_pool,  'zgrid',   zgrid)
     call mpas_pool_get_array(diag_pool,  'exner',   exner)
+    call mpas_pool_get_array(diag_pool,  'pressure_base',    pressure_b)
+    call mpas_pool_get_array(diag_pool,  'pressure_p',       pressure_p)
 
     ! Update fields needed by microphysics...
     do ithread = 1,nThreads
@@ -787,12 +789,16 @@ contains
              ! Vertical velocity (w -> omega)
              rho = zz(iLay,iCol) * rho_zz(iLay,iCol)
              physics_statein % vvl(iCol,iLay) = -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho*gravity
+
+             ! Non-hydrostatic pressure
+             physics_statein % prsl(iCol,iLay) = pressure_p(iLay,iCol) + pressure_b(iLay,iCol)
+             physics_statein % prsi(iCol,iLay) = exner(iLay,iCol)
           end do
        end do
     end do
 
-    ! Update hydrostatic pressure.
-    call ufs_mpas_hydrostatic_pressure(physics_statein, tracers(index_qv,:,:))
+    ! Update hydrostatic pressure. NO. MP in MPAS uses full non-hydrostatic pressure.    
+    call ufs_mpas_hydrostatic_pressure(physics_statein, tracers(index_qv,:,:),'microphysics')
 
     ! Reset tendencies for clean accumulation of ONLY the microphysics tendencies.
     physics_state % dtdt(:,:)   = 0._RKIND
@@ -971,32 +977,6 @@ contains
     call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo ) !dim (nCells); surface albedo (fraction)
     call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss )
 
-    ! write(*,*) 'shape/min/max dzs',SHAPE(dzs),minval(dzs),maxval(dzs)
-    ! write(*,*) 'shape/min/max isltyp',SHAPE(isltyp),minval(isltyp),maxval(isltyp)
-    ! write(*,*) 'shape/min/max ivgtyp',SHAPE(ivgtyp),minval(ivgtyp),maxval(ivgtyp)
-    ! write(*,*) 'shape/min/max landmask',SHAPE(landmask),minval(landmask),maxval(landmask)
-    ! write(*,*) 'mminlu',mminlu
-    ! write(*,*) 'shape/min/max albbck',SHAPE(albbck),minval(albbck),maxval(albbck)
-    ! write(*,*) 'shape/min/max sh2o',SHAPE(sh2o),minval(sh2o),maxval(sh2o)
-    ! write(*,*) 'shape/min/max smois',SHAPE(smois),minval(smois),maxval(smois)
-    ! write(*,*) 'shape/min/max skintemp',SHAPE(skintemp),minval(skintemp),maxval(skintemp)
-    ! write(*,*) 'shape/min/max snow',SHAPE(snow),minval(snow),maxval(snow)
-    ! write(*,*) 'shape/min/max snowc',SHAPE(snowc),minval(snowc),maxval(snowc)
-    ! write(*,*) 'shape/min/max snowh',SHAPE(snowh),minval(snowh),maxval(snowh)
-    ! write(*,*) 'shape/min/max sst',SHAPE(sst),minval(sst),maxval(sst)
-    ! write(*,*) 'shape/min/max ter',SHAPE(ter),minval(ter),maxval(ter)
-    ! write(*,*) 'shape/min/max tmn',SHAPE(tmn),minval(tmn),maxval(tmn)
-    ! write(*,*) 'shape/min/max tslb)',SHAPE(tslb),minval(tslb),maxval(tslb)
-    ! write(*,*) 'shape/min/max vegfra',SHAPE(vegfra),minval(vegfra),maxval(vegfra)
-    ! write(*,*) 'shape/min/max seaice',SHAPE(seaice),minval(seaice),maxval(seaice)
-    ! write(*,*) 'shape/min/max xice',SHAPE(xice),minval(xice),maxval(xice)
-    ! write(*,*) 'shape/min/max xland',SHAPE(xland),minval(xland),maxval(xland)
-    ! write(*,*) 'shape/min/max shdmin',SHAPE(shdmin),minval(shdmin),maxval(shdmin)
-    ! write(*,*) 'shape/min/max shdmax',SHAPE(shdmax),minval(shdmax),maxval(shdmax)
-    ! write(*,*) 'shape/min/max snoalb',SHAPE(snoalb),minval(snoalb),maxval(snoalb)
-    ! write(*,*) 'shape/min/max greenfrac',SHAPE(greenfrac),minval(greenfrac),maxval(greenfrac)
-    ! write(*,*) 'shape/min/max albedo12m',SHAPE(albedo12m),minval(albedo12m),maxval(albedo12m)
-
     do ithread = 1,nThreads
       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
         if (landmask(iCol) == 1) then
@@ -1051,9 +1031,9 @@ contains
         !physics_sfcprop % weasdl(iCol) =
         physics_sfcprop % tsfc(iCol) = skintemp(iCol)
         physics_sfcprop % tsfcl(iCol) = skintemp(iCol)
-        !physics_sfcprop % zorlw(iCol) =
-        !physics_sfcprop % zorll(iCol) =
-        !physics_sfcprop % zorli(iCol) =
+        physics_sfcprop % zorlw(iCol) = znt(iCol)*100.0_RKIND
+        physics_sfcprop % zorll(iCol) = znt(iCol)*100.0_RKIND
+        physics_sfcprop % zorli(iCol) = znt(iCol)*100.0_RKIND
         physics_sfcprop % albdirvis_lnd(iCol) = sfc_albedo(iCol)
         physics_sfcprop % albdirnir_lnd(iCol) = sfc_albedo(iCol)
         physics_sfcprop % albdifvis_lnd(iCol) = sfc_albedo(iCol)
@@ -1318,161 +1298,6 @@ contains
 
   end subroutine ufs_mpas_reference_pressure
 
-  !> #########################################################################################
-  !> Procedure to populate MPAS diag_phys pool with CCPP data.
-  !>
-  !> The fields from diag_phys are allocated by MPAS, populated with CCPP Physics data, and
-  !> written to output. So essentially we copy physics arrays back into MPAS memory to use
-  !> MPAS's native output functionality.
-  !> #########################################################################################
-  subroutine ufs_mpas_phys_diag(control,radiation,diagnostics,tbd)
-    use GFS_typedefs,         only : GFS_control_type
-    use GFS_typedefs,         only : GFS_radtend_type
-    use GFS_typedefs,         only : GFS_diag_type
-    use GFS_typedefs,         only : GFS_tbd_type
-    use mpas_derived_types,   only : mpas_pool_type
-    use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension
-    use mpas_pool_routines,   only : mpas_pool_get_array, mpas_pool_get_config
-
-    ! Arguments
-    type(GFS_control_type), intent(in) :: control
-    type(GFS_radtend_type), intent(in) :: radiation
-    type(GFS_diag_type),    intent(in) :: diagnostics
-    type(GFS_tbd_type),     intent(in) :: tbd
-
-    ! Locals
-    type(mpas_pool_type), pointer :: diag_phys
-    real(RKIND), pointer :: swdnb(:),swdnbc(:),swupb(:),swupbc(:)
-    real(RKIND), pointer :: lwdnb(:),lwdnbc(:),lwupb(:),lwupbc(:)
-    real(RKIND), pointer :: re_cloud(:,:),re_ice(:,:),re_snow(:,:)
-    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
-    real(RKIND), pointer :: refl10cm(:,:)
-    real(RKIND), pointer :: rainc(:),rainnc(:),frainnc(:),snownc(:),graupelnc(:)
-    real(RKIND), pointer :: raincv(:),rainncv(:),snowncv(:),graupelncv(:)
-    real(RKIND), pointer :: dusfcg(:),dvsfcg(:),dusfc_ls(:),dvsfc_ls(:)
-    real(RKIND), pointer :: dusfc_bl(:),dvsfc_bl(:),dusfc_ss(:),dvsfc_ss(:)
-    real(RKIND), pointer :: dusfc_fd(:),dvsfc_fd(:)
-    real(RKIND), pointer :: dtaux3d(:,:), dtauy3d(:,:)
-    real(RKIND), pointer :: dtaux3d_ls(:,:), dtauy3d_ls(:,:), dtaux3d_ss(:,:), dtauy3d_ss(:,:)
-    real(RKIND), pointer :: dtaux3d_fd(:,:), dtauy3d_fd(:,:), dtaux3d_bl(:,:), dtauy3d_bl(:,:)
-    integer,     pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
-    integer :: iCol, ithread
-    character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_phys_diag'
-
-    ! Get openMP information
-    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
-    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadStart', cellSolveThreadStart)
-    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadEnd',   cellSolveThreadEnd)
-
-    ! Access MPAS data pools.
-    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics',  diag_phys)
-
-    ! Grab fields from MPAS pools
-    call mpas_pool_get_array(diag_phys,'swdnb'     , swdnb     )
-    call mpas_pool_get_array(diag_phys,'swdnbc'    , swdnbc    )
-    call mpas_pool_get_array(diag_phys,'swupb'     , swupb     )
-    call mpas_pool_get_array(diag_phys,'swupbc'    , swupbc    )
-    call mpas_pool_get_array(diag_phys,'lwdnb'     , lwdnb     )
-    call mpas_pool_get_array(diag_phys,'lwdnbc'    , lwdnbc    )
-    call mpas_pool_get_array(diag_phys,'lwupb'     , lwupb     )
-    call mpas_pool_get_array(diag_phys,'lwupbc'    , lwupbc    )
-    call mpas_pool_get_array(diag_phys,'refl10cm'  , refl10cm  )
-    call mpas_pool_get_array(diag_phys,'rainc'     , rainc     )
-    call mpas_pool_get_array(diag_phys,'rainnc'    , rainnc    )
-    call mpas_pool_get_array(diag_phys,'frainnc'   , frainnc   )
-    call mpas_pool_get_array(diag_phys,'snownc'    , snownc    )
-    call mpas_pool_get_array(diag_phys,'graupelnc' , graupelnc )
-    call mpas_pool_get_array(diag_phys,'raincv'    , raincv    )
-    call mpas_pool_get_array(diag_phys,'rainncv'   , rainncv   )
-    call mpas_pool_get_array(diag_phys,'snowncv'   , snowncv   )
-    call mpas_pool_get_array(diag_phys,'graupelncv', graupelncv)
-    call mpas_pool_get_array(diag_phys,'re_cloud'  , re_cloud  )
-    call mpas_pool_get_array(diag_phys,'re_ice'    , re_ice    )
-    call mpas_pool_get_array(diag_phys,'re_snow'   , re_snow   )
-    call mpas_pool_get_array(diag_phys,'sfc_albedo', sfc_albedo)
-    call mpas_pool_get_array(diag_phys,'sfc_emiss' , sfc_emiss )
-    ! UFS GWD diagnostics are conditionally allocated.
-    if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
-       call mpas_pool_get_array(diag_phys,'dusfcg'    , dusfcg    )
-       call mpas_pool_get_array(diag_phys,'dvsfcg'    , dvsfcg    )
-       call mpas_pool_get_array(diag_phys,'dusfc_ls'  , dusfc_ls  )
-       call mpas_pool_get_array(diag_phys,'dvsfc_ls'  , dvsfc_ls  )
-       call mpas_pool_get_array(diag_phys,'dusfc_bl'  , dusfc_bl  )
-       call mpas_pool_get_array(diag_phys,'dvsfc_bl'  , dvsfc_bl  )
-       call mpas_pool_get_array(diag_phys,'dusfc_ss'  , dusfc_ss  )
-       call mpas_pool_get_array(diag_phys,'dvsfc_ss'  , dvsfc_ss  )
-       call mpas_pool_get_array(diag_phys,'dusfc_fd'  , dusfc_fd  )
-       call mpas_pool_get_array(diag_phys,'dvsfc_fd'  , dvsfc_fd  )
-       call mpas_pool_get_array(diag_phys,'dtaux3d'   , dtaux3d   )
-       call mpas_pool_get_array(diag_phys,'dtauy3d'   , dtauy3d   )
-       call mpas_pool_get_array(diag_phys,'dtaux3d_ls', dtaux3d_ls)
-       call mpas_pool_get_array(diag_phys,'dtauy3d_ls', dtauy3d_ls)
-       call mpas_pool_get_array(diag_phys,'dtaux3d_ss', dtaux3d_ss)
-       call mpas_pool_get_array(diag_phys,'dtauy3d_ss', dtauy3d_ss)
-       call mpas_pool_get_array(diag_phys,'dtaux3d_bl', dtaux3d_bl)
-       call mpas_pool_get_array(diag_phys,'dtauy3d_bl', dtauy3d_bl)
-       call mpas_pool_get_array(diag_phys,'dtaux3d_fd', dtaux3d_fd)
-       call mpas_pool_get_array(diag_phys,'dtauy3d_fd', dtauy3d_fd)
-    end if
-
-    do ithread = 1,nThreads
-       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          ! Radiation fluxes at surface
-          swdnb(iCol)  = radiation%sfcfsw(iCol)%dnfxc
-          swdnbc(iCol) = radiation%sfcfsw(iCol)%dnfx0
-          swupb(iCol)  = radiation%sfcfsw(iCol)%upfxc
-          swupbc(iCol) = radiation%sfcfsw(iCol)%upfx0
-          lwdnb(iCol)  = radiation%sfcflw(iCol)%dnfxc
-          lwdnbc(iCol) = radiation%sfcflw(iCol)%dnfx0
-          lwupb(iCol)  = radiation%sfcflw(iCol)%upfxc
-          lwupbc(iCol) = radiation%sfcflw(iCol)%upfx0
-          ! Reflectivity
-          refl10cm(:,iCol) = diagnostics%refl_10cm(iCol,:)
-          ! Instantaneous precipitation
-          raincv(iCol)     = diagnostics%rain(iCol)
-          rainncv(iCol)    = diagnostics%rainc(iCol)
-          snowncv(iCol)    = diagnostics%snow(iCol)
-          graupelncv(iCol) = diagnostics%graupel(iCol)
-          ! Accumulated precipitation
-          rainc(iCol)      = diagnostics%cnvprcp(iCol)
-          rainnc(iCol)     = diagnostics%totprcp(iCol)
-          frainnc(iCol)    = diagnostics%totice(iCol)
-          snownc(iCol)     = diagnostics%totsnw(iCol)
-          graupelnc(iCol)  = diagnostics%totgrp(iCol)
-          ! Hydrometeor effective radii
-          re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)
-          re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)
-          re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)
-          ! Surface radiative properties (*NOTE* These are the base albedo/emissivity before LSM)
-          sfc_albedo(iCol) = radiation%sfalb(iCol)
-          sfc_emiss(iCol)  = radiation%semis(iCol)
-          ! Gravity-wave physics diagnostics (conditionally allocated)
-          if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
-             dusfcg(iCol)       = diagnostics%dusfcg(iCol)
-             dvsfcg(iCol)       = diagnostics%dvsfcg(iCol)
-             dusfc_ls(iCol)     = diagnostics%du_ogwcol(iCol)
-             dvsfc_ls(iCol)     = diagnostics%dv_ogwcol(iCol)
-             dusfc_bl(iCol)     = diagnostics%du_oblcol(iCol)
-             dvsfc_bl(iCol)     = diagnostics%dv_oblcol(iCol)
-             dusfc_ss(iCol)     = diagnostics%du_osscol(iCol)
-             dvsfc_ss(iCol)     = diagnostics%dv_osscol(iCol)
-             dusfc_fd(iCol)     = diagnostics%du_ofdcol(iCol)
-             dvsfc_fd(iCol)     = diagnostics%dv_ofdcol(iCol)
-             dtaux3d(:,iCol)    = diagnostics%dudt_gw(iCol,:)
-             dtauy3d(:,iCol)    = diagnostics%dvdt_gw(iCol,:)
-             dtaux3d_ls(:,iCol) = diagnostics%dudt_ogw(iCol,:)
-             dtauy3d_ls(:,iCol) = diagnostics%dvdt_ogw(iCol,:)
-             dtaux3d_ss(:,iCol) = diagnostics%dudt_oss(iCol,:)
-             dtauy3d_ss(:,iCol) = diagnostics%dvdt_oss(iCol,:)
-             dtaux3d_bl(:,iCol) = diagnostics%dudt_obl(iCol,:)
-             dtauy3d_bl(:,iCol) = diagnostics%dvdt_obl(iCol,:)
-             dtaux3d_fd(:,iCol) = diagnostics%dudt_ofd(iCol,:)
-             dtauy3d_fd(:,iCol) = diagnostics%dvdt_ofd(iCol,:)
-          end if
-       end do
-    end do
-  end subroutine ufs_mpas_phys_diag
-
   !> ########################################################################################
   !> This routine computes physics surface properties using data from the LANDUSE.TBL (read in
   !> during model initialization), and MPAS grid information.
@@ -1646,7 +1471,7 @@ contains
   !> Procedure to compute hydrostatic pressure for the physics from the MPAS state.
   !>
   !> ########################################################################################
-  subroutine ufs_mpas_hydrostatic_pressure(physics_state, qv)
+  subroutine ufs_mpas_hydrostatic_pressure(physics_state, qv, when)
     use mpas_log,             only : mpas_log_write
     use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
     use mpas_derived_types,   only : mpas_pool_type
@@ -1656,6 +1481,7 @@ contains
 
     type(GFS_statein_type), intent(inout) :: physics_state
     real(kind=RKIND), intent(in) :: qv(:,:)
+    character(len=*), intent(in) :: when
     !
     type(mpas_pool_type), pointer :: diag_pool, mesh_pool, state_pool
     integer, pointer :: nThreads,  nCellsSolve, nVertLevels
@@ -1666,7 +1492,7 @@ contains
     real(kind=RKIND), pointer :: pressure_p(:,:), zgrid(:,:), mass(:,:), zz(:,:)
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_hydrostatic_pressure'
 
-    call mpas_log_write(subname //'   Computing hydrostatic pressure for physics ', messageType=MPAS_LOG_WARN)
+    call mpas_log_write(subname //'   Computing hydrostatic pressure for '//trim(when), messageType=MPAS_LOG_WARN)
 
     ! Get openMP information
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
@@ -1767,15 +1593,18 @@ contains
           physics_state % dp(iCol,1) = physics_state % prsi(iCol,1) - physics_state % prsi(iCol,2)
           do iLay = 2,nVertLevels
              physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
-             physics_state % dpc(iCol,iLay)  = physics_state % prsl(iCol,iLay-1) - physics_state % prsl(iCol,iLay)
+!             physics_state % dpc(iCol,iLay)  = physics_state % prsl(iCol,iLay-1) - physics_state % prsl(iCol,iLay)
           end do
-          physics_state % dpc(iCol,1)  = physics_state % prsi(iCol,1) - physics_state % prsl(iCol,1)
+          !          physics_state % dpc(iCol,1)  = physics_state % prsi(iCol,1) - physics_state % prsl(iCol,1)
+          do iLay = 1, nVertLevels
+             physics_state % dpc(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
+          end do
           ! Surface pressure
           physics_state % pgr(iCol) = physics_state % prsi(iCol,1)
        end do
     end do
 
-    call mpas_log_write(subname //'   Finished computing hydrostatic pressure for physics ', messageType=MPAS_LOG_WARN)
+    call mpas_log_write(subname //'   Finished computing hydrostatic pressure for '//trim(when), messageType=MPAS_LOG_WARN)
 
   end subroutine ufs_mpas_hydrostatic_pressure
 
