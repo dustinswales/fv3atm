@@ -382,7 +382,8 @@ contains
   !> #########################################################################################
   subroutine atmos_model_radiation_physics(Atmos)
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_physics_to_mpas
-    use atmos_coupling_mod,     only : ufs_mpas_phys_diag, ufs_mpas_landuse_update, ufs_mpas_surface_update
+    use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_surface_update
+    use ufs_mpas_io,            only : ufs_mpas_phys_diag
     type (atmos_control_type), intent(inout) :: Atmos
     ! Locals
     integer :: ierr

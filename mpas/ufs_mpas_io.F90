@@ -343,6 +343,8 @@ module ufs_mpas_io
        var_info_type('xicem'                           , 'real'      , 1), & !SFC
        var_info_type('z0'                              , 'real'      , 1), & !SFC
        var_info_type('znt'                             , 'real'      , 1), & !SFC
+       var_info_type('hfx'                             , 'real'      , 1), & !SFC
+       var_info_type('qfx'                             , 'real'      , 1), & !SFC
        var_info_type('dusfcg'                          , 'real'      , 1), & !GWD
        var_info_type('dvsfcg'                          , 'real'      , 1), & !GWD
        var_info_type('dusfc_ls'                        , 'real'      , 1), & !GWD
@@ -649,6 +651,163 @@ contains
 
     call mpas_log_write(subname //'   Finished reading/broadcasting MPAS RUC LSM slope data ')
   end subroutine use_mpas_slopedata_read
+
+  !> #########################################################################################
+  !> Procedure to populate MPAS diag_phys pool with CCPP data.
+  !>
+  !> The fields from diag_phys are allocated by MPAS, populated with CCPP Physics data, and
+  !> written to output. So essentially we copy physics arrays back into MPAS memory to use
+  !> MPAS's native output functionality.
+  !>
+  !> CAN BE REMOVED/NOT-CALLED WHEN ESMF WRITE GRID COMPONENT IMPLEMENTED.
+  !> #########################################################################################
+  subroutine ufs_mpas_phys_diag(control, radiation, diagnostics, tbd)
+    use GFS_typedefs,         only : GFS_control_type
+    use GFS_typedefs,         only : GFS_radtend_type
+    use GFS_typedefs,         only : GFS_diag_type
+    use GFS_typedefs,         only : GFS_tbd_type
+    use mpas_derived_types,   only : mpas_pool_type
+    use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension
+    use mpas_pool_routines,   only : mpas_pool_get_array, mpas_pool_get_config
+
+    ! Arguments
+    type(GFS_control_type), intent(in) :: control
+    type(GFS_radtend_type), intent(in) :: radiation
+    type(GFS_diag_type),    intent(in) :: diagnostics
+    type(GFS_tbd_type),     intent(in) :: tbd
+
+    ! Locals
+    type(mpas_pool_type), pointer :: diag_phys
+    real(RKIND), pointer :: swdnb(:),swdnbc(:),swupb(:),swupbc(:)
+    real(RKIND), pointer :: lwdnb(:),lwdnbc(:),lwupb(:),lwupbc(:)
+    real(RKIND), pointer :: re_cloud(:,:),re_ice(:,:),re_snow(:,:)
+    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
+    real(RKIND), pointer :: refl10cm(:,:)
+    real(RKIND), pointer :: rainc(:),rainnc(:),frainnc(:),snownc(:),graupelnc(:)
+    real(RKIND), pointer :: raincv(:),rainncv(:),snowncv(:),graupelncv(:)
+    real(RKIND), pointer :: dusfcg(:),dvsfcg(:),dusfc_ls(:),dvsfc_ls(:)
+    real(RKIND), pointer :: dusfc_bl(:),dvsfc_bl(:),dusfc_ss(:),dvsfc_ss(:)
+    real(RKIND), pointer :: dusfc_fd(:),dvsfc_fd(:)
+    real(RKIND), pointer :: dtaux3d(:,:), dtauy3d(:,:)
+    real(RKIND), pointer :: dtaux3d_ls(:,:), dtauy3d_ls(:,:), dtaux3d_ss(:,:), dtauy3d_ss(:,:)
+    real(RKIND), pointer :: dtaux3d_fd(:,:), dtauy3d_fd(:,:), dtaux3d_bl(:,:), dtauy3d_bl(:,:)
+    integer,     pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
+    integer :: iCol, ithread
+    character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_phys_diag'
+
+    ! Get openMP information
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadStart', cellSolveThreadStart)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadEnd',   cellSolveThreadEnd)
+
+    ! Access MPAS data pools.
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics',  diag_phys)
+
+    ! Grab fields from MPAS pools
+    call mpas_pool_get_array(diag_phys,'swdnb'     , swdnb     )
+    call mpas_pool_get_array(diag_phys,'swdnbc'    , swdnbc    )
+    call mpas_pool_get_array(diag_phys,'swupb'     , swupb     )
+    call mpas_pool_get_array(diag_phys,'swupbc'    , swupbc    )
+    call mpas_pool_get_array(diag_phys,'lwdnb'     , lwdnb     )
+    call mpas_pool_get_array(diag_phys,'lwdnbc'    , lwdnbc    )
+    call mpas_pool_get_array(diag_phys,'lwupb'     , lwupb     )
+    call mpas_pool_get_array(diag_phys,'lwupbc'    , lwupbc    )
+    call mpas_pool_get_array(diag_phys,'refl10cm'  , refl10cm  )
+    call mpas_pool_get_array(diag_phys,'rainc'     , rainc     )
+    call mpas_pool_get_array(diag_phys,'rainnc'    , rainnc    )
+    call mpas_pool_get_array(diag_phys,'frainnc'   , frainnc   )
+    call mpas_pool_get_array(diag_phys,'snownc'    , snownc    )
+    call mpas_pool_get_array(diag_phys,'graupelnc' , graupelnc )
+    call mpas_pool_get_array(diag_phys,'raincv'    , raincv    )
+    call mpas_pool_get_array(diag_phys,'rainncv'   , rainncv   )
+    call mpas_pool_get_array(diag_phys,'snowncv'   , snowncv   )
+    call mpas_pool_get_array(diag_phys,'graupelncv', graupelncv)
+    call mpas_pool_get_array(diag_phys,'re_cloud'  , re_cloud  )
+    call mpas_pool_get_array(diag_phys,'re_ice'    , re_ice    )
+    call mpas_pool_get_array(diag_phys,'re_snow'   , re_snow   )
+    call mpas_pool_get_array(diag_phys,'sfc_albedo', sfc_albedo)
+    call mpas_pool_get_array(diag_phys,'sfc_emiss' , sfc_emiss )
+    ! UFS GWD diagnostics are conditionally allocated.
+    if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
+       call mpas_pool_get_array(diag_phys,'dusfcg'    , dusfcg    )
+       call mpas_pool_get_array(diag_phys,'dvsfcg'    , dvsfcg    )
+       call mpas_pool_get_array(diag_phys,'dusfc_ls'  , dusfc_ls  )
+       call mpas_pool_get_array(diag_phys,'dvsfc_ls'  , dvsfc_ls  )
+       call mpas_pool_get_array(diag_phys,'dusfc_bl'  , dusfc_bl  )
+       call mpas_pool_get_array(diag_phys,'dvsfc_bl'  , dvsfc_bl  )
+       call mpas_pool_get_array(diag_phys,'dusfc_ss'  , dusfc_ss  )
+       call mpas_pool_get_array(diag_phys,'dvsfc_ss'  , dvsfc_ss  )
+       call mpas_pool_get_array(diag_phys,'dusfc_fd'  , dusfc_fd  )
+       call mpas_pool_get_array(diag_phys,'dvsfc_fd'  , dvsfc_fd  )
+       call mpas_pool_get_array(diag_phys,'dtaux3d'   , dtaux3d   )
+       call mpas_pool_get_array(diag_phys,'dtauy3d'   , dtauy3d   )
+       call mpas_pool_get_array(diag_phys,'dtaux3d_ls', dtaux3d_ls)
+       call mpas_pool_get_array(diag_phys,'dtauy3d_ls', dtauy3d_ls)
+       call mpas_pool_get_array(diag_phys,'dtaux3d_ss', dtaux3d_ss)
+       call mpas_pool_get_array(diag_phys,'dtauy3d_ss', dtauy3d_ss)
+       call mpas_pool_get_array(diag_phys,'dtaux3d_bl', dtaux3d_bl)
+       call mpas_pool_get_array(diag_phys,'dtauy3d_bl', dtauy3d_bl)
+       call mpas_pool_get_array(diag_phys,'dtaux3d_fd', dtaux3d_fd)
+       call mpas_pool_get_array(diag_phys,'dtauy3d_fd', dtauy3d_fd)
+    end if
+
+    do ithread = 1,nThreads
+       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+          ! Radiation fluxes at surface
+          swdnb(iCol)  = radiation%sfcfsw(iCol)%dnfxc
+          swdnbc(iCol) = radiation%sfcfsw(iCol)%dnfx0
+          swupb(iCol)  = radiation%sfcfsw(iCol)%upfxc
+          swupbc(iCol) = radiation%sfcfsw(iCol)%upfx0
+          lwdnb(iCol)  = radiation%sfcflw(iCol)%dnfxc
+          lwdnbc(iCol) = radiation%sfcflw(iCol)%dnfx0
+          lwupb(iCol)  = radiation%sfcflw(iCol)%upfxc
+          lwupbc(iCol) = radiation%sfcflw(iCol)%upfx0
+          ! Reflectivity
+          refl10cm(:,iCol) = diagnostics%refl_10cm(iCol,:)
+          ! Instantaneous precipitation
+          raincv(iCol)     = diagnostics%rain(iCol)
+          rainncv(iCol)    = diagnostics%rainc(iCol)
+          snowncv(iCol)    = diagnostics%snow(iCol)
+          graupelncv(iCol) = diagnostics%graupel(iCol)
+          ! Accumulated precipitation
+          rainc(iCol)      = diagnostics%cnvprcp(iCol)
+          rainnc(iCol)     = diagnostics%totprcp(iCol)
+          frainnc(iCol)    = diagnostics%totice(iCol)
+          snownc(iCol)     = diagnostics%totsnw(iCol)
+          graupelnc(iCol)  = diagnostics%totgrp(iCol)
+          ! Hydrometeor effective radii
+          re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)
+          re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)
+          re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)
+          ! Surface radiative properties (*NOTE* These are the base albedo/emissivity before LSM)
+          sfc_albedo(iCol) = radiation%sfalb(iCol)
+          sfc_emiss(iCol)  = radiation%semis(iCol)
+          ! Gravity-wave physics diagnostics (conditionally allocated)
+          if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
+             dusfcg(iCol)       = diagnostics%dusfcg(iCol)
+             dvsfcg(iCol)       = diagnostics%dvsfcg(iCol)
+             dusfc_ls(iCol)     = diagnostics%du_ogwcol(iCol)
+             dvsfc_ls(iCol)     = diagnostics%dv_ogwcol(iCol)
+             dusfc_bl(iCol)     = diagnostics%du_oblcol(iCol)
+             dvsfc_bl(iCol)     = diagnostics%dv_oblcol(iCol)
+             dusfc_ss(iCol)     = diagnostics%du_osscol(iCol)
+             dvsfc_ss(iCol)     = diagnostics%dv_osscol(iCol)
+             dusfc_fd(iCol)     = diagnostics%du_ofdcol(iCol)
+             dvsfc_fd(iCol)     = diagnostics%dv_ofdcol(iCol)
+             dtaux3d(:,iCol)    = diagnostics%dudt_gw(iCol,:)
+             dtauy3d(:,iCol)    = diagnostics%dvdt_gw(iCol,:)
+             dtaux3d_ls(:,iCol) = diagnostics%dudt_ogw(iCol,:)
+             dtauy3d_ls(:,iCol) = diagnostics%dvdt_ogw(iCol,:)
+             dtaux3d_ss(:,iCol) = diagnostics%dudt_oss(iCol,:)
+             dtauy3d_ss(:,iCol) = diagnostics%dvdt_oss(iCol,:)
+             dtaux3d_bl(:,iCol) = diagnostics%dudt_obl(iCol,:)
+             dtauy3d_bl(:,iCol) = diagnostics%dvdt_obl(iCol,:)
+             dtaux3d_fd(:,iCol) = diagnostics%dudt_ofd(iCol,:)
+             dtauy3d_fd(:,iCol) = diagnostics%dvdt_ofd(iCol,:)
+          end if
+       end do
+    end do
+  end subroutine ufs_mpas_phys_diag
 
   !> #########################################################################################
   !> Procedure to read in stream_list (a.k.a File with fields to include in output stream)
