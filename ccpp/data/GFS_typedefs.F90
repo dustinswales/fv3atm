@@ -1892,6 +1892,7 @@ module GFS_typedefs
 
 !--- Diagnostic that needs to be carried over to the next time step (removed from diag_type)
     real (kind=kind_phys), pointer :: hpbl     (:)     => null()  !< Planetary boundary layer height
+    integer,               pointer :: kpbl     (:)     => null()  !< Vertical index level of PBL top
     real (kind=kind_phys), pointer :: ud_mf  (:,:)     => null()  !< updraft mass flux
 
 !-- Diagnostic variable that passes to dyn_core (SA-3D-TKE)
@@ -7829,6 +7830,8 @@ module GFS_typedefs
 
     allocate (Tbd%hpbl (IM))
     Tbd%hpbl     = clear_val
+    allocate (Tbd%kpbl (IM))
+    Tbd%kpbl     = clear_val
 
 ! Allocate horizontal component of dku for dyn_core (SA-3D-TKE)
     allocate (Tbd%dku3d_h (IM,Model%levs))

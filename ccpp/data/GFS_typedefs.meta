@@ -8871,6 +8871,12 @@
   dimensions = (horizontal_dimension)
   type = real
   kind = kind_phys
+[kpbl]
+  standard_name = vertical_index_at_top_of_atmosphere_boundary_layer
+  long_name = vertical index at top atmospheric boundary layer
+  units = index
+  dimensions = (horizontal_dimension)
+  type = integer
 [dku3d_h]
   standard_name = horizontal_atmosphere_momentum_diffusivity_for_dynamics
   long_name = horizontal atmospheric momentum diffusivity for dynamics

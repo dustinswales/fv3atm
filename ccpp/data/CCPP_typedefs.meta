@@ -1168,12 +1168,6 @@
   units = index
   dimensions = (horizontal_dimension)
   type = integer
-[kpbl]
-  standard_name = vertical_index_at_top_of_atmosphere_boundary_layer
-  long_name = vertical index at top atmospheric boundary layer
-  units = index
-  dimensions = (horizontal_dimension)
-  type = integer
 [kt]
   standard_name = vertical_index_difference_between_layer_and_upper_bound
   long_name = vertical index difference between layer and upper bound

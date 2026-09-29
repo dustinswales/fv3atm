@@ -321,6 +321,7 @@ module ufs_mpas_io
        var_info_type('lwupbc'                          , 'real'      , 1), & !RAD
        var_info_type('lwupt'                           , 'real'      , 1), & !RAD
        var_info_type('lwuptc'                          , 'real'      , 1), & !RAD
+       !
        var_info_type('refl10cm'                        , 'real'      , 2), & !MP
        var_info_type('rainncv'                         , 'real'      , 1), & !MP
        var_info_type('raincv'                          , 'real'      , 1), & !MP
@@ -329,22 +330,54 @@ module ufs_mpas_io
        var_info_type('rainnc'                          , 'real'      , 1), & !MP
        var_info_type('rainc'                           , 'real'      , 1), & !MP
        var_info_type('frainnc'                         , 'real'      , 1), & !MP
+       var_info_type('sr'                              , 'real'      , 1), & !MP
        var_info_type('snownc'                          , 'real'      , 1), & !MP
        var_info_type('graupelnc'                       , 'real'      , 1), & !MP
        var_info_type('re_cloud'                        , 'real'      , 2), & !MP
        var_info_type('re_ice'                          , 'real'      , 2), & !MP
        var_info_type('re_snow'                         , 'real'      , 2), & !MP
-       var_info_type('sfc_emibck'                      , 'real'      , 1), & !SFC
-       var_info_type('mavail'                          , 'real'      , 1), & !SFC
-       var_info_type('sfc_albedo'                      , 'real'      , 1), & !SFC/RAD
-       var_info_type('sfc_emiss'                       , 'real'      , 1), & !SFC/RAD
-       var_info_type('thc'                             , 'real'      , 1), & !SFC
+       !
+       var_info_type('sfc_emibck'                      , 'real'      , 1), & !LSM
+       var_info_type('mavail'                          , 'real'      , 1), & !LSM
+       var_info_type('sfc_albedo'                      , 'real'      , 1), & !LSM/RAD
+       var_info_type('sfc_emiss'                       , 'real'      , 1), & !LSM/RAD
+       var_info_type('thc'                             , 'real'      , 1), & !LSM
+       var_info_type('xicem'                           , 'real'      , 1), & !LSM
+       var_info_type('z0'                              , 'real'      , 1), & !LSM
+       var_info_type('znt'                             , 'real'      , 1), & !LSM
+       !
        var_info_type('ust'                             , 'real'      , 1), & !SFC
-       var_info_type('xicem'                           , 'real'      , 1), & !SFC
-       var_info_type('z0'                              , 'real'      , 1), & !SFC
-       var_info_type('znt'                             , 'real'      , 1), & !SFC
+       var_info_type('ustm'                            , 'real'      , 1), & !SFC
+       var_info_type('qsfc'                            , 'real'      , 1), & !SFC
        var_info_type('hfx'                             , 'real'      , 1), & !SFC
        var_info_type('qfx'                             , 'real'      , 1), & !SFC
+       var_info_type('fm'                              , 'real'      , 1), & !SFC
+       var_info_type('fh'     	      	      	       , 'real'      , 1), & !SFC
+       var_info_type('chs'                             , 'real'      , 1), & !SFC
+       var_info_type('cqs'                             , 'real'      , 1), & !SFC
+       var_info_type('chs2'                            , 'real'      , 1), & !SFC
+       var_info_type('cqs2'                            , 'real'      , 1), & !SFC
+       var_info_type('zol'                             , 'real'      , 1), & !SFC
+       var_info_type('mol'                             , 'real'      , 1), & !SFC
+       var_info_type('rmol'                            , 'real'      , 1), & !SFC
+       var_info_type('lh'                              , 'real'      , 1), & !SFC
+       !
+       var_info_type('hpbl'                            , 'real'      , 1), & !PBL
+       var_info_type('kpbl'                            , 'integer'   , 1), & !PBL
+       var_info_type('kzm'                             , 'real'      , 2), & !PBL
+       var_info_type('kzh'                             , 'real'      , 2), & !PBL
+       var_info_type('kzq'                             , 'real'      , 2), & !PBL
+       var_info_type('cldfrac_bl'                      , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('qc_bl'                           , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('qi_bl'                           , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('el_pbl'                          , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('sh3d'                            , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('sm3d'                            , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('qke'                             , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('tsq'                             , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('qsq'                             , 'real'      , 2), & !PBL (MYNN)
+       var_info_type('cov'                             , 'real'      , 2), & !PBL (MYNN)
+       !
        var_info_type('dusfcg'                          , 'real'      , 1), & !GWD
        var_info_type('dvsfcg'                          , 'real'      , 1), & !GWD
        var_info_type('dusfc_ls'                        , 'real'      , 1), & !GWD
@@ -661,11 +694,12 @@ contains
   !>
   !> CAN BE REMOVED/NOT-CALLED WHEN ESMF WRITE GRID COMPONENT IMPLEMENTED.
   !> #########################################################################################
-  subroutine ufs_mpas_phys_diag(control, radiation, diagnostics, tbd)
+  subroutine ufs_mpas_phys_diag(control, radiation, diagnostics, tbd, surface)
     use GFS_typedefs,         only : GFS_control_type
     use GFS_typedefs,         only : GFS_radtend_type
     use GFS_typedefs,         only : GFS_diag_type
     use GFS_typedefs,         only : GFS_tbd_type
+    use GFS_typedefs,         only : GFS_sfcprop_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension
     use mpas_pool_routines,   only : mpas_pool_get_array, mpas_pool_get_config
@@ -675,13 +709,16 @@ contains
     type(GFS_radtend_type), intent(in) :: radiation
     type(GFS_diag_type),    intent(in) :: diagnostics
     type(GFS_tbd_type),     intent(in) :: tbd
-
+    type(GFS_sfcprop_type), intent(in) :: surface
     ! Locals
     type(mpas_pool_type), pointer :: diag_phys
     real(RKIND), pointer :: swdnb(:),swdnbc(:),swupb(:),swupbc(:)
     real(RKIND), pointer :: lwdnb(:),lwdnbc(:),lwupb(:),lwupbc(:)
     real(RKIND), pointer :: re_cloud(:,:),re_ice(:,:),re_snow(:,:)
-    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
+    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:),sr(:),hfx(:),qfx(:),ust(:),znt(:),qsfc(:), ustm(:)
+    real(RKIND), pointer :: fm(:),fh(:),chs(:),cqs(:),chs2(:),cqs2(:),lh(:)
+    real(RKIND), pointer :: mol(:), rmol(:),zol(:),hpbl(:),kzm(:,:),kzh(:,:),kzq(:,:)
+    real(RKIND), pointer :: sh3d(:,:),sm3d(:,:),cldfrac_bl(:,:),qc_bl(:,:),qi_bl(:,:),el_pbl(:,:),qke(:,:),tsq(:,:),qsq(:,:),cov(:,:)
     real(RKIND), pointer :: refl10cm(:,:)
     real(RKIND), pointer :: rainc(:),rainnc(:),frainnc(:),snownc(:),graupelnc(:)
     real(RKIND), pointer :: raincv(:),rainncv(:),snowncv(:),graupelncv(:)
@@ -691,7 +728,7 @@ contains
     real(RKIND), pointer :: dtaux3d(:,:), dtauy3d(:,:)
     real(RKIND), pointer :: dtaux3d_ls(:,:), dtauy3d_ls(:,:), dtaux3d_ss(:,:), dtauy3d_ss(:,:)
     real(RKIND), pointer :: dtaux3d_fd(:,:), dtauy3d_fd(:,:), dtaux3d_bl(:,:), dtauy3d_bl(:,:)
-    integer,     pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
+    integer,     pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:), kpbl(:)
     integer :: iCol, ithread
     character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_phys_diag'
 
@@ -718,6 +755,7 @@ contains
     call mpas_pool_get_array(diag_phys,'frainnc'   , frainnc   )
     call mpas_pool_get_array(diag_phys,'snownc'    , snownc    )
     call mpas_pool_get_array(diag_phys,'graupelnc' , graupelnc )
+    call mpas_pool_get_array(diag_phys,'sr'        , sr        )
     call mpas_pool_get_array(diag_phys,'raincv'    , raincv    )
     call mpas_pool_get_array(diag_phys,'rainncv'   , rainncv   )
     call mpas_pool_get_array(diag_phys,'snowncv'   , snowncv   )
@@ -727,6 +765,39 @@ contains
     call mpas_pool_get_array(diag_phys,'re_snow'   , re_snow   )
     call mpas_pool_get_array(diag_phys,'sfc_albedo', sfc_albedo)
     call mpas_pool_get_array(diag_phys,'sfc_emiss' , sfc_emiss )
+    call mpas_pool_get_array(diag_phys,'hfx'       , hfx       )
+    call mpas_pool_get_array(diag_phys,'qfx'       , qfx       )
+    call mpas_pool_get_array(diag_phys,'ust'       , ust       )
+    call mpas_pool_get_array(diag_phys,'ustm'      , ustm      )
+    call mpas_pool_get_array(diag_phys,'znt'       , znt       )
+    call mpas_pool_get_array(diag_phys,'qsfc'      , qsfc      )
+    call mpas_pool_get_array(diag_phys,'fm'        , fm        )
+    call mpas_pool_get_array(diag_phys,'fh'        , fh        )
+    if (control % do_mynnedmf) then
+       call mpas_pool_get_array(diag_phys,'sh3d'      , sh3d      )
+       call mpas_pool_get_array(diag_phys,'sm3d'      , sm3d      )
+       call mpas_pool_get_array(diag_phys,'cldfrac_bl', cldfrac_bl)
+       call mpas_pool_get_array(diag_phys,'qc_bl'     , qc_bl     )
+       call mpas_pool_get_array(diag_phys,'qi_bl'     , qi_bl     )
+       call mpas_pool_get_array(diag_phys,'el_pbl'    , el_pbl    )
+       call mpas_pool_get_array(diag_phys,'qke'       , qke       )
+       call mpas_pool_get_array(diag_phys,'tsq'       , tsq       )
+       call mpas_pool_get_array(diag_phys,'qsq'       , qsq       )
+       call mpas_pool_get_array(diag_phys,'cov'       , cov       )
+    endif
+    call mpas_pool_get_array(diag_phys,'chs'       , chs       )
+    call mpas_pool_get_array(diag_phys,'cqs'       , cqs       )
+    call mpas_pool_get_array(diag_phys,'chs2'      , chs2      )
+    call mpas_pool_get_array(diag_phys,'cqs2'      , cqs2      )
+    call mpas_pool_get_array(diag_phys,'zol'       , zol       )
+    call mpas_pool_get_array(diag_phys,'mol'       , mol       )
+    call mpas_pool_get_array(diag_phys,'rmol'      , rmol      )
+    call mpas_pool_get_array(diag_phys,'lh'        , lh        )
+    call mpas_pool_get_array(diag_phys,'hpbl'      , hpbl      )
+    call mpas_pool_get_array(diag_phys,'kpbl'      , kpbl      )
+    call mpas_pool_get_array(diag_phys,'kzm'       , kzm       )
+    call mpas_pool_get_array(diag_phys,'kzh'       , kzh       )
+    call mpas_pool_get_array(diag_phys,'kzq'       , kzq       )
     ! UFS GWD diagnostics are conditionally allocated.
     if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
        call mpas_pool_get_array(diag_phys,'dusfcg'    , dusfcg    )
@@ -764,17 +835,18 @@ contains
           lwupbc(iCol) = radiation%sfcflw(iCol)%upfx0
           ! Reflectivity
           refl10cm(:,iCol) = diagnostics%refl_10cm(iCol,:)
-          ! Instantaneous precipitation
-          raincv(iCol)     = diagnostics%rain(iCol)
-          rainncv(iCol)    = diagnostics%rainc(iCol)
+          ! Instantaneous (time-step) precipitation
+          raincv(iCol)     = diagnostics%rainc(iCol)
+          rainncv(iCol)    = max(0._RKIND, diagnostics%rain(iCol) - diagnostics%rainc(iCol))
           snowncv(iCol)    = diagnostics%snow(iCol)
           graupelncv(iCol) = diagnostics%graupel(iCol)
           ! Accumulated precipitation
           rainc(iCol)      = diagnostics%cnvprcp(iCol)
-          rainnc(iCol)     = diagnostics%totprcp(iCol)
-          frainnc(iCol)    = diagnostics%totice(iCol)
+          rainnc(iCol)     = max(0._RKIND, diagnostics%totprcp(iCol) - diagnostics%cnvprcp(iCol))
+          frainnc(iCol)    = diagnostics%frzr(iCol)
           snownc(iCol)     = diagnostics%totsnw(iCol)
           graupelnc(iCol)  = diagnostics%totgrp(iCol)
+          sr(iCol)         = diagnostics%sr(iCol)
           ! Hydrometeor effective radii
           re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)
           re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)
@@ -805,6 +877,43 @@ contains
              dtaux3d_fd(:,iCol) = diagnostics%dudt_ofd(iCol,:)
              dtauy3d_fd(:,iCol) = diagnostics%dvdt_ofd(iCol,:)
           end if
+          ! Surface fields
+          hfx(iCol)    = surface%hflx(iCol)
+          qfx(iCol)    = surface%evap(iCol)
+          ust(iCol)    = surface%uustar(iCol)
+          znt(iCol)    = surface%zorl(iCol)
+          qsfc(iCol)   = surface%qss(iCol)
+          ! MONIN-OBUKHOV
+          fm(iCol)     = surface%ffmm(iCol)
+          fh(iCol)     = surface%ffhh(iCol)
+          ! MYNN (surface-layer model)
+          ustm(iCol)   = surface%ustm(iCol)
+          chs(iCol)    = surface%flhc(iCol)
+          cqs(iCol)    = surface%flqc(iCol)
+          chs2(iCol)   = surface%chs2(iCol)
+          cqs2(iCol)   = surface%cqs2(iCol)
+          zol(iCol)    = surface%zol(iCol)
+          mol(iCol)    = surface%mol(iCol)
+          rmol(iCol)   = surface%rmol(iCol)
+          lh(iCol)     = surface%lh(iCol)
+          ! MYNN (PBL)
+          if (control % do_mynnedmf) then
+             sh3d(:,iCol)       = tbd%sh3d(iCol,:)
+             sm3d(:,iCol)       = tbd%sm3d(iCol,:)
+             cldfrac_bl(:,iCol) = tbd%cldfra_bl(iCol,:)
+             qc_bl(:,iCol)      = tbd%qc_bl(iCol,:)
+             qi_bl(:,iCol)      = tbd%qi_bl(iCol,:)
+             el_pbl(:,iCol)     = tbd%el_pbl(iCol,:)
+             qke(:,iCol)        = tbd%qke(iCol,:)
+             tsq(:,iCol)        = tbd%tsq(iCol,:)
+             qsq(:,iCol)        = tbd%qsq(iCol,:)
+             cov(:,iCol)        = tbd%cov(iCol,:)
+          endif
+          hpbl(iCol) = tbd%hpbl(iCol)
+          kpbl(iCol) = tbd%kpbl(iCol)
+          !kzm(:,iCol)  =
+          !kzh(:,iCol)  =
+          !kzq(:,iCol)  =
        end do
     end do
   end subroutine ufs_mpas_phys_diag

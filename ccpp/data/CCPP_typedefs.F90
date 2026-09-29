@@ -179,7 +179,6 @@ module CCPP_typedefs
     integer,               pointer      :: kcnv(:)            => null()  !<
     integer                             :: kd                            !<
     integer,               pointer      :: kinver(:)          => null()  !<
-    integer,               pointer      :: kpbl(:)            => null()  !<
     integer                             :: kt                            !<
     integer,               pointer      :: ktop(:)            => null()  !<
     integer,               pointer      :: mbota(:,:)         => null()  !<
@@ -604,7 +603,6 @@ contains
     allocate (Interstitial%kbot            (ixs:ixe))
     allocate (Interstitial%kcnv            (ixs:ixe))
     allocate (Interstitial%kinver          (ixs:ixe))
-    allocate (Interstitial%kpbl            (ixs:ixe))
     allocate (Interstitial%ktop            (ixs:ixe))
     allocate (Interstitial%mbota           (ixs:ixe,3))
     allocate (Interstitial%mtopa           (ixs:ixe,3))
@@ -932,7 +930,6 @@ contains
     deallocate (Interstitial%kbot)
     deallocate (Interstitial%kcnv)
     deallocate (Interstitial%kinver)
-    deallocate (Interstitial%kpbl)
     deallocate (Interstitial%ktop)
     deallocate (Interstitial%mbota)
     deallocate (Interstitial%mtopa)
@@ -1463,7 +1460,6 @@ contains
     Interstitial%kcnv            = 0
     Interstitial%kd              = 0
     Interstitial%kinver          = Model%levs
-    Interstitial%kpbl            = 0
     Interstitial%kt              = 0
     Interstitial%ktop            = 1
     Interstitial%mbota           = 0
