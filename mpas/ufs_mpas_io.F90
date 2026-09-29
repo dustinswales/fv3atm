@@ -836,23 +836,23 @@ contains
           ! Reflectivity
           refl10cm(:,iCol) = diagnostics%refl_10cm(iCol,:)
           ! Instantaneous (time-step) precipitation
-          raincv(iCol)     = diagnostics%rainc(iCol)
-          rainncv(iCol)    = max(0._RKIND, diagnostics%rain(iCol) - diagnostics%rainc(iCol))
-          snowncv(iCol)    = diagnostics%snow(iCol)
-          graupelncv(iCol) = diagnostics%graupel(iCol)
+          raincv(iCol)     = diagnostics%rainc(iCol)*1000. ! meters -> mm
+          rainncv(iCol)    = max(0._RKIND, diagnostics%rain(iCol) - diagnostics%rainc(iCol))*1000. ! meters -> mm 
+          snowncv(iCol)    = diagnostics%snow(iCol)*1000. ! meters -> mm 
+          graupelncv(iCol) = diagnostics%graupel(iCol)*1000. ! meters -> mm 
           ! Accumulated precipitation
-          rainc(iCol)      = diagnostics%cnvprcp(iCol)
-          rainnc(iCol)     = max(0._RKIND, diagnostics%totprcp(iCol) - diagnostics%cnvprcp(iCol))
-          frainnc(iCol)    = diagnostics%frzr(iCol)
-          snownc(iCol)     = diagnostics%totsnw(iCol)
-          graupelnc(iCol)  = diagnostics%totgrp(iCol)
+          rainc(iCol)      = diagnostics%cnvprcp(iCol)*1000. ! meters -> mm 
+          rainnc(iCol)     = max(0._RKIND, diagnostics%totprcp(iCol) - diagnostics%cnvprcp(iCol))*1000. ! meters -> mm 
+          frainnc(iCol)    = diagnostics%frzr(iCol)*1000. ! meters -> mm 
+          snownc(iCol)     = diagnostics%totsnw(iCol)*1000. ! meters -> mm 
+          graupelnc(iCol)  = diagnostics%totgrp(iCol)*1000. ! meters -> mm 
           sr(iCol)         = diagnostics%sr(iCol)
           ! Hydrometeor effective radii
-          re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)
-          re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)
-          re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)
+          re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)*1e6 ! microns -> meters
+          re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)*1e6 ! microns -> meters 
+          re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)*1e6 ! microns -> meters 
           ! Surface radiative properties (*NOTE* These are the base albedo/emissivity before LSM)
-          sfc_albedo(iCol) = radiation%sfalb(iCol)
+          sfc_albedo(iCol) = swupb(iCol)/swdnb(iCol)
           sfc_emiss(iCol)  = radiation%semis(iCol)
           ! Gravity-wave physics diagnostics (conditionally allocated)
           if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
@@ -881,7 +881,7 @@ contains
           hfx(iCol)    = surface%hflx(iCol)
           qfx(iCol)    = surface%evap(iCol)
           ust(iCol)    = surface%uustar(iCol)
-          znt(iCol)    = surface%zorl(iCol)
+          znt(iCol)    = surface%zorl(iCol)*0.01 ! meters -> cm
           qsfc(iCol)   = surface%qss(iCol)
           ! MONIN-OBUKHOV
           fm(iCol)     = surface%ffmm(iCol)

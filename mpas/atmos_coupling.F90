@@ -49,7 +49,7 @@ contains
     type(GFS_radtend_type),   intent(inout) :: radiation
     integer, pointer,         intent(in   ) :: mpas_from_ufs_cnst(:)
     ! Locals
-    type(mpas_pool_type), pointer :: state_pool, diag_pool, mesh_pool, diag_phys
+    type(mpas_pool_type), pointer :: state_pool, diag_pool, mesh_pool, diag_phys, sfc_input
     integer :: iCol, iLay, iTracer, ithread
     integer, pointer :: nCellsSolve, num_scalars, nVertLevels, index_qv
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
@@ -57,7 +57,7 @@ contains
     real(kind=RKIND), pointer :: ux(:,:), uy(:,:), theta_m(:,:), rho_zz(:,:), zgrid(:,:), zz(:,:)
     real(kind=RKIND), pointer :: exner(:,:), tracers(:,:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND), pointer :: w(:,:), surface_pressure(:), rho(:,:)
-    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
+    real(RKIND), pointer :: sfc_albbck(:),sfc_emibck(:)
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_physics'
 
     ! Get openMP information
@@ -70,6 +70,7 @@ contains
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag',  diag_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics',  diag_phys)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input', sfc_input)
 
     ! Get MPAS dimensions
     call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
@@ -90,8 +91,8 @@ contains
     call mpas_pool_get_array(diag_pool,  'pressure_base',          pressure_b)
     call mpas_pool_get_array(diag_pool,  'pressure_p',             pressure_p)
     call mpas_pool_get_array(diag_pool,  'surface_pressure',       surface_pressure)
-    call mpas_pool_get_array(diag_phys,  'sfc_albedo',             sfc_albedo)
-    call mpas_pool_get_array(diag_phys,  'sfc_emiss' ,             sfc_emiss)
+    call mpas_pool_get_array(sfc_input,  'sfc_albbck',             sfc_albbck)   ! 0.08 over water
+    call mpas_pool_get_array(diag_phys,  'sfc_emibck',             sfc_emibck)   ! table emissivity
 
     ! Local variables
     allocate(rho( nCellsSolve, nVertLevels))
@@ -159,8 +160,8 @@ contains
           ! For UFS-MPAS, these fields come from the MPAS sfc_input pool, which can be updated (daily)
           ! by calling ufs_mpas_landuse_update. The MPAS surface albedo is broadband,
           ! so we need to asign the same albedo for all channels in GFS_radiation_surface.
-          radiation % semis(iCol) = sfc_emiss(iCol)
-          radiation % salb(iCol)  = sfc_albedo(iCol)
+          radiation % salb(iCol)  = sfc_albbck(iCol)
+          radiation % semis(iCol) = sfc_emibck(iCol)
        end do
     end do
 
@@ -993,10 +994,10 @@ contains
         physics_sfcprop % tg3(iCol)   = tmn(iCol)
         physics_sfcprop % zorl(iCol)  = znt(iCol)*100.0_RKIND
         !alvsf, alvwf, alnsf, alnwf - MPAS doesn't split into visible/nir and strong/weak coszen dependency; set these to the value that we have (background snow-free albedo of surface)?
-        physics_sfcprop % alvsf(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % alvwf(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % alnsf(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % alnwf(iCol) = sfc_albedo(iCol)
+        physics_sfcprop % alvsf(iCol) = albbck(iCol)
+        physics_sfcprop % alvwf(iCol) = albbck(iCol)
+        physics_sfcprop % alnsf(iCol) = albbck(iCol)
+        physics_sfcprop % alnwf(iCol) = albbck(iCol)
         physics_sfcprop % facsf(iCol) = 0.5!? - from gcycle?
         physics_sfcprop % facwf(iCol) = 0.5!? - from gcycle?
         physics_sfcprop % vfrac(iCol) = vegfra(iCol)*0.01_RKIND !conversion to decimal from percent
@@ -1612,12 +1613,14 @@ contains
   !> Procedure to interpolate monthly surface data for current day.
   !>
   !> ########################################################################################
-  subroutine ufs_mpas_surface_update(day, month)
+  subroutine ufs_mpas_surface_update(day, month, surface)
     use mpas_log,             only : mpas_log_write
     use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_dimension, mpas_pool_get_array, mpas_pool_get_subpool
+    use GFS_typedefs,         only : GFS_sfcprop_type
 
+    type(GFS_sfcprop_type),   intent(inout) :: surface
     integer, intent(in) :: day, month
     !
     integer, pointer :: nCellsSolve, landmask(:)
@@ -1669,6 +1672,10 @@ contains
        if(landmask(iCell) .eq. 0) sfc_albbck(iCell) = 0.08
     enddo
 
+    surface%alvsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface%alvwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface%alnsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface%alnwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
     !
     call mpas_log_write(subname //'   Finished updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
  end subroutine ufs_mpas_surface_update

@@ -401,7 +401,7 @@ contains
     if ((doy .gt. doyc) .or. doyc==-999) then
        call ESMF_TimeGet(Atmos%CurrTime, MM=moy, rc=rc)
        call ESMF_TimeGet(Atmos%CurrTime, DD=dom, rc=rc)
-       call ufs_mpas_surface_update(dom, moy)
+       call ufs_mpas_surface_update(dom, moy, UFSATM_sfcprop)
        doyc = doy
     endif
 
