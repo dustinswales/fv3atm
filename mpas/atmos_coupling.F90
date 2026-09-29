@@ -16,6 +16,7 @@ module atmos_coupling_mod
   public :: ufs_mpas_to_microphysics
   public :: ufs_mpas_grid_to_physics
   public :: ufs_mpas_sfc_to_physics
+  public :: ufs_mpas_sfc_rad_update
   public :: ufs_mpas_landuse_update
   public :: ufs_mpas_gwd_to_physics
   public :: ufs_mpas_reference_pressure
@@ -1077,6 +1078,62 @@ contains
 
 
   end subroutine ufs_mpas_sfc_to_physics
+
+  !> #########################################################################################
+  !> Feed RUC's snow/ice-aware albedo and emissivity back to MPAS sfc_albedo / sfc_emiss,
+  !> so the next radiation call sees them (same as stock MPAS, where RUC writes
+  !> sfc_albedo/sfc_emiss in driver_lsm and RRTMG reads them on the following call).
+  !>
+  !> #########################################################################################
+  subroutine ufs_mpas_sfc_rad_update(physics_sfcprop, physics_control)
+    use GFS_typedefs,       only : GFS_sfcprop_type, GFS_control_type
+    use mpas_derived_types, only : mpas_pool_type
+    use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, &
+                                   mpas_pool_get_dimension, mpas_pool_get_config
+ 
+    type(GFS_sfcprop_type), intent(in) :: physics_sfcprop
+    type(GFS_control_type), intent(in) :: physics_control
+ 
+    type(mpas_pool_type), pointer :: diag_phys
+    integer,  pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
+    logical,  pointer :: config_frac_seaice
+    real(RKIND), pointer :: sfc_albedo(:), sfc_emiss(:)
+    real(RKIND) :: fi
+    integer :: iCol, ithread
+    real(RKIND), parameter :: alb_wat = 0.08_RKIND, ems_wat = 0.98_RKIND   ! MPAS open-water values
+ 
+    ! Only meaningful when RUC provides the land/ice albedo and emissivity.
+    if (physics_control%lsm /= physics_control%lsm_ruc) return
+ 
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'nThreads',             nThreads)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'cellSolveThreadStart', cellSolveThreadStart)
+    call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'cellSolveThreadEnd',   cellSolveThreadEnd)
+    call mpas_pool_get_config(domain_ptr % blocklist % configs, 'config_frac_seaice', config_frac_seaice)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
+    call mpas_pool_get_array(diag_phys, 'sfc_albedo', sfc_albedo)
+    call mpas_pool_get_array(diag_phys, 'sfc_emiss',  sfc_emiss)
+ 
+    do ithread = 1, nThreads
+       do iCol = cellSolveThreadStart(ithread), cellSolveThreadEnd(ithread)
+          select case (nint(physics_sfcprop%slmsk(iCol)))
+          case (1)                                   ! land: RUC albedo/emissivity incl. snow
+             sfc_albedo(iCol) = physics_sfcprop%sfalb_lnd(iCol)
+             sfc_emiss(iCol)  = physics_sfcprop%emis_lnd(iCol)
+          case (2)                                   ! sea ice: RUC ice albedo/emissivity incl. snow on ice
+             if (config_frac_seaice) then
+                fi = min(1._RKIND, max(0._RKIND, real(physics_sfcprop%fice(iCol), RKIND)))
+                sfc_albedo(iCol) = fi*physics_sfcprop%sfalb_ice(iCol) + (1._RKIND-fi)*alb_wat
+                sfc_emiss(iCol)  = fi*physics_sfcprop%emis_ice(iCol)  + (1._RKIND-fi)*ems_wat
+             else
+                sfc_albedo(iCol) = physics_sfcprop%sfalb_ice(iCol)
+                sfc_emiss(iCol)  = physics_sfcprop%emis_ice(iCol)
+             end if
+          case default                               ! open water: keep MPAS values (0.08 / 0.98)
+          end select
+       end do
+    end do
+ 
+  end subroutine ufs_mpas_sfc_rad_update
 
   !> #########################################################################################
   !> Procedure to populate CCPP data container with MPAS pool data.

@@ -694,7 +694,8 @@ contains
   !>
   !> CAN BE REMOVED/NOT-CALLED WHEN ESMF WRITE GRID COMPONENT IMPLEMENTED.
   !> #########################################################################################
-  subroutine ufs_mpas_phys_diag(control, radiation, diagnostics, tbd, surface)
+  subroutine ufs_mpas_phys_diag(statein, control, radiation, diagnostics, tbd, surface)
+    use GFS_typedefs,         only : GFS_statein_type
     use GFS_typedefs,         only : GFS_control_type
     use GFS_typedefs,         only : GFS_radtend_type
     use GFS_typedefs,         only : GFS_diag_type
@@ -705,6 +706,7 @@ contains
     use mpas_pool_routines,   only : mpas_pool_get_array, mpas_pool_get_config
 
     ! Arguments
+    type(GFS_statein_type), intent(in) :: statein
     type(GFS_control_type), intent(in) :: control
     type(GFS_radtend_type), intent(in) :: radiation
     type(GFS_diag_type),    intent(in) :: diagnostics
@@ -714,8 +716,10 @@ contains
     type(mpas_pool_type), pointer :: diag_phys
     real(RKIND), pointer :: swdnb(:),swdnbc(:),swupb(:),swupbc(:)
     real(RKIND), pointer :: lwdnb(:),lwdnbc(:),lwupb(:),lwupbc(:)
+    real(RKIND), pointer :: swdnt(:),swdntc(:),swupt(:),swuptc(:)
+    real(RKIND), pointer :: lwdnt(:),lwdntc(:),lwupt(:),lwuptc(:)
     real(RKIND), pointer :: re_cloud(:,:),re_ice(:,:),re_snow(:,:)
-    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:),sr(:),hfx(:),qfx(:),ust(:),znt(:),qsfc(:), ustm(:)
+    real(RKIND), pointer :: sr(:),hfx(:),qfx(:),ust(:),znt(:),qsfc(:), ustm(:)
     real(RKIND), pointer :: fm(:),fh(:),chs(:),cqs(:),chs2(:),cqs2(:),lh(:)
     real(RKIND), pointer :: mol(:), rmol(:),zol(:),hpbl(:),kzm(:,:),kzh(:,:),kzq(:,:)
     real(RKIND), pointer :: sh3d(:,:),sm3d(:,:),cldfrac_bl(:,:),qc_bl(:,:),qi_bl(:,:),el_pbl(:,:),qke(:,:),tsq(:,:),qsq(:,:),cov(:,:)
@@ -730,6 +734,9 @@ contains
     real(RKIND), pointer :: dtaux3d_fd(:,:), dtauy3d_fd(:,:), dtaux3d_bl(:,:), dtauy3d_bl(:,:)
     integer,     pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:), kpbl(:)
     integer :: iCol, ithread
+    real(RKIND), parameter :: m2mm = 1000._RKIND, um2m = 1.e-6_RKIND
+    real(RKIND), parameter :: cp = 1004.5_RKIND, rd = 287.05_RKIND, rv = 461.5_RKIND, hvap = 2.5e6_RKIND
+    real(RKIND) :: rho_sfc
     character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_phys_diag'
 
     ! Get openMP information
@@ -749,6 +756,15 @@ contains
     call mpas_pool_get_array(diag_phys,'lwdnbc'    , lwdnbc    )
     call mpas_pool_get_array(diag_phys,'lwupb'     , lwupb     )
     call mpas_pool_get_array(diag_phys,'lwupbc'    , lwupbc    )
+    call mpas_pool_get_array(diag_phys,'swdnt'     , swdnt     )
+    call mpas_pool_get_array(diag_phys,'swdntc'    , swdntc    )
+    call mpas_pool_get_array(diag_phys,'swupt'     , swupt     )
+    call mpas_pool_get_array(diag_phys,'swuptc'    , swuptc    )
+    call mpas_pool_get_array(diag_phys,'lwdnt'     , lwdnt     )
+    call mpas_pool_get_array(diag_phys,'lwdntc'    , lwdntc    )
+    call mpas_pool_get_array(diag_phys,'lwupt'     , lwupt     )
+    call mpas_pool_get_array(diag_phys,'lwuptc'    , lwuptc    )
+    
     call mpas_pool_get_array(diag_phys,'refl10cm'  , refl10cm  )
     call mpas_pool_get_array(diag_phys,'rainc'     , rainc     )
     call mpas_pool_get_array(diag_phys,'rainnc'    , rainnc    )
@@ -763,8 +779,6 @@ contains
     call mpas_pool_get_array(diag_phys,'re_cloud'  , re_cloud  )
     call mpas_pool_get_array(diag_phys,'re_ice'    , re_ice    )
     call mpas_pool_get_array(diag_phys,'re_snow'   , re_snow   )
-    call mpas_pool_get_array(diag_phys,'sfc_albedo', sfc_albedo)
-    call mpas_pool_get_array(diag_phys,'sfc_emiss' , sfc_emiss )
     call mpas_pool_get_array(diag_phys,'hfx'       , hfx       )
     call mpas_pool_get_array(diag_phys,'qfx'       , qfx       )
     call mpas_pool_get_array(diag_phys,'ust'       , ust       )
@@ -824,7 +838,7 @@ contains
 
     do ithread = 1,nThreads
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          ! Radiation fluxes at surface
+          ! --- Radiation fluxes at surface
           swdnb(iCol)  = radiation%sfcfsw(iCol)%dnfxc
           swdnbc(iCol) = radiation%sfcfsw(iCol)%dnfx0
           swupb(iCol)  = radiation%sfcfsw(iCol)%upfxc
@@ -833,27 +847,39 @@ contains
           lwdnbc(iCol) = radiation%sfcflw(iCol)%dnfx0
           lwupb(iCol)  = radiation%sfcflw(iCol)%upfxc
           lwupbc(iCol) = radiation%sfcflw(iCol)%upfx0
-          ! Reflectivity
+
+          ! --- TOA fluxes (RRTMG: no clear-sky SW-down at TOA separate from all-sky; no LW-down at TOA)
+          swdnt(iCol)  = diagnostics%topfsw(iCol)%dnfxc
+          swdntc(iCol) = diagnostics%topfsw(iCol)%dnfxc
+          swupt(iCol)  = diagnostics%topfsw(iCol)%upfxc
+          swuptc(iCol) = diagnostics%topfsw(iCol)%upfx0
+          lwdnt(iCol)  = 0._RKIND
+          lwdntc(iCol) = 0._RKIND
+          lwupt(iCol)  = diagnostics%topflw(iCol)%upfxc
+          lwuptc(iCol) = diagnostics%topflw(iCol)%upfx0
+
+          ! --- Other
           refl10cm(:,iCol) = diagnostics%refl_10cm(iCol,:)
-          ! Instantaneous (time-step) precipitation
-          raincv(iCol)     = diagnostics%rainc(iCol)*1000. ! meters -> mm
-          rainncv(iCol)    = max(0._RKIND, diagnostics%rain(iCol) - diagnostics%rainc(iCol))*1000. ! meters -> mm 
-          snowncv(iCol)    = diagnostics%snow(iCol)*1000. ! meters -> mm 
-          graupelncv(iCol) = diagnostics%graupel(iCol)*1000. ! meters -> mm 
-          ! Accumulated precipitation
-          rainc(iCol)      = diagnostics%cnvprcp(iCol)*1000. ! meters -> mm 
-          rainnc(iCol)     = max(0._RKIND, diagnostics%totprcp(iCol) - diagnostics%cnvprcp(iCol))*1000. ! meters -> mm 
-          frainnc(iCol)    = diagnostics%frzr(iCol)*1000. ! meters -> mm 
-          snownc(iCol)     = diagnostics%totsnw(iCol)*1000. ! meters -> mm 
-          graupelnc(iCol)  = diagnostics%totgrp(iCol)*1000. ! meters -> mm 
           sr(iCol)         = diagnostics%sr(iCol)
-          ! Hydrometeor effective radii
-          re_cloud(:,iCol) = tbd%phy_f3d(iCol,:,control%nleffr)*1e6 ! microns -> meters
-          re_ice(:,iCol)   = tbd%phy_f3d(iCol,:,control%nieffr)*1e6 ! microns -> meters 
-          re_snow(:,iCol)  = tbd%phy_f3d(iCol,:,control%nseffr)*1e6 ! microns -> meters 
-          ! Surface radiative properties (*NOTE* These are the base albedo/emissivity before LSM)
-          sfc_albedo(iCol) = swupb(iCol)/swdnb(iCol)
-          sfc_emiss(iCol)  = radiation%semis(iCol)
+
+          ! --- Precipitation: UFS m (lwe) -> MPAS mm
+          !     (totsnw/totgrp are declared kg m-2 in GFS_typedefs.meta, but GFS_MP_generic_post
+          !      accumulates Diag%snow/graupel, which are m -> same factor)
+          raincv(iCol)     = m2mm * diagnostics%rainc(iCol)
+          rainncv(iCol)    = m2mm * max(0._RKIND, diagnostics%rain(iCol) - diagnostics%rainc(iCol))
+          snowncv(iCol)    = m2mm * diagnostics%snow(iCol)
+          graupelncv(iCol) = m2mm * diagnostics%graupel(iCol)
+          rainc(iCol)      = m2mm * diagnostics%cnvprcp(iCol)
+          rainnc(iCol)     = m2mm * max(0._RKIND, diagnostics%totprcp(iCol) - diagnostics%cnvprcp(iCol))
+          frainnc(iCol)    = m2mm * diagnostics%frzr(iCol)
+          snownc(iCol)     = m2mm * diagnostics%totsnw(iCol)
+          graupelnc(iCol)  = m2mm * diagnostics%totgrp(iCol)
+
+          ! --- Effective radii: UFS micron -> MPAS m
+          re_cloud(:,iCol) = um2m * tbd%phy_f3d(iCol,:,control%nleffr)
+          re_ice(:,iCol)   = um2m * tbd%phy_f3d(iCol,:,control%nieffr)
+          re_snow(:,iCol)  = um2m * tbd%phy_f3d(iCol,:,control%nseffr)
+
           ! Gravity-wave physics diagnostics (conditionally allocated)
           if (control % ldiag_ugwp .or. control % do_ugwp_v1) then
              dusfcg(iCol)       = diagnostics%dusfcg(iCol)
@@ -877,19 +903,21 @@ contains
              dtaux3d_fd(:,iCol) = diagnostics%dudt_ofd(iCol,:)
              dtauy3d_fd(:,iCol) = diagnostics%dvdt_ofd(iCol,:)
           end if
-          ! Surface fields
-          hfx(iCol)    = surface%hflx(iCol)
-          qfx(iCol)    = surface%evap(iCol)
+          ! --- Surface layer: convert kinematic / rho-weighted UFS fields to MPAS units
+          rho_sfc = statein%prsl(iCol,1) / (rd * statein%tgrs(iCol,1) * &
+                    (1._RKIND + (rv/rd - 1._RKIND) * statein%qgrs(iCol,1,control%ntqv)))
+          hfx(iCol)    = rho_sfc * cp * surface%hflx(iCol)       ! K m s-1        -> W m-2
+          qfx(iCol)    = rho_sfc * surface%evap(iCol)            ! kg kg-1 m s-1  -> kg m-2 s-1
+          znt(iCol)    = 0.01_RKIND * surface%zorl(iCol)         ! cm             -> m
+          chs(iCol)    = surface%flhc(iCol) / (rho_sfc * cp)     ! W m-2 K-1      -> m s-1
+          cqs(iCol)    = surface%flqc(iCol) / rho_sfc            ! kg m-2 s-1     -> m s-1
           ust(iCol)    = surface%uustar(iCol)
-          znt(iCol)    = surface%zorl(iCol)*0.01 ! meters -> cm
           qsfc(iCol)   = surface%qss(iCol)
           ! MONIN-OBUKHOV
           fm(iCol)     = surface%ffmm(iCol)
           fh(iCol)     = surface%ffhh(iCol)
           ! MYNN (surface-layer model)
           ustm(iCol)   = surface%ustm(iCol)
-          chs(iCol)    = surface%flhc(iCol)
-          cqs(iCol)    = surface%flqc(iCol)
           chs2(iCol)   = surface%chs2(iCol)
           cqs2(iCol)   = surface%cqs2(iCol)
           zol(iCol)    = surface%zol(iCol)

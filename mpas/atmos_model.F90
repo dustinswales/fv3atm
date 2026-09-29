@@ -383,6 +383,7 @@ contains
   subroutine atmos_model_radiation_physics(Atmos)
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_physics_to_mpas
     use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_surface_update
+    use atmos_coupling_mod,     only : ufs_mpas_sfc_rad_update
     use ufs_mpas_io,            only : ufs_mpas_phys_diag
     type (atmos_control_type), intent(inout) :: Atmos
     ! Locals
@@ -431,8 +432,11 @@ contains
     stop_time = MPI_Wtime()
     physClock = physClock + (stop_time - start_time)
 
+    ! Update radiative surface properties from LSM
+    call ufs_mpas_sfc_rad_update(UFSATM_sfcprop, UFSATM_control)
+
     ! Populate MPAS pools with physics data (for diagnostics).
-    call ufs_mpas_phys_diag(UFSATM_control, UFSATM_radtend, UFSATM_intdiag, UFSATM_tbd, UFSATM_sfcprop)
+    call ufs_mpas_phys_diag(UFSATM_statein, UFSATM_control, UFSATM_radtend, UFSATM_intdiag, UFSATM_tbd, UFSATM_sfcprop)
 
     ! Prepare MPAS dycore inputs with CCPP physics outputs.
     call ufs_physics_to_mpas(UFSATM_stateout, mpas_from_ufs_cnst)
