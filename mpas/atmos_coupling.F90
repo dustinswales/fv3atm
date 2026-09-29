@@ -58,7 +58,7 @@ contains
     real(kind=RKIND), pointer :: ux(:,:), uy(:,:), theta_m(:,:), rho_zz(:,:), zgrid(:,:), zz(:,:)
     real(kind=RKIND), pointer :: exner(:,:), tracers(:,:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND), pointer :: w(:,:), surface_pressure(:), rho(:,:)
-    real(RKIND), pointer :: sfc_albbck(:),sfc_emibck(:)
+    real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_physics'
 
     ! Get openMP information
@@ -92,8 +92,8 @@ contains
     call mpas_pool_get_array(diag_pool,  'pressure_base',          pressure_b)
     call mpas_pool_get_array(diag_pool,  'pressure_p',             pressure_p)
     call mpas_pool_get_array(diag_pool,  'surface_pressure',       surface_pressure)
-    call mpas_pool_get_array(sfc_input,  'sfc_albbck',             sfc_albbck)   ! 0.08 over water
-    call mpas_pool_get_array(diag_phys,  'sfc_emibck',             sfc_emibck)   ! table emissivity
+    call mpas_pool_get_array(diag_phys,  'sfc_albedo',             sfc_albedo)
+    call mpas_pool_get_array(diag_phys,  'sfc_emiss' ,             sfc_emiss)
 
     ! Local variables
     allocate(rho( nCellsSolve, nVertLevels))
@@ -161,8 +161,8 @@ contains
           ! For UFS-MPAS, these fields come from the MPAS sfc_input pool, which can be updated (daily)
           ! by calling ufs_mpas_landuse_update. The MPAS surface albedo is broadband,
           ! so we need to asign the same albedo for all channels in GFS_radiation_surface.
-          radiation % salb(iCol)  = sfc_albbck(iCol)
-          radiation % semis(iCol) = sfc_emibck(iCol)
+          radiation % salb(iCol)  = sfc_albedo(iCol)
+          radiation % semis(iCol) = sfc_emiss(iCol)
        end do
     end do
 
@@ -991,10 +991,9 @@ contains
           end if
         endif
         physics_sfcprop % tsfco(iCol) = sst(iCol)
-        physics_sfcprop % weasd(iCol) = snow(iCol)  !weasd is in mm, snow is in kg m-2; after dividing by density of water and converting to mm, these are equivalent
+        physics_sfcprop % weasd(iCol) = snow(iCol)
         physics_sfcprop % tg3(iCol)   = tmn(iCol)
         physics_sfcprop % zorl(iCol)  = znt(iCol)*100.0_RKIND
-        !alvsf, alvwf, alnsf, alnwf - MPAS doesn't split into visible/nir and strong/weak coszen dependency; set these to the value that we have (background snow-free albedo of surface)?
         physics_sfcprop % alvsf(iCol) = albbck(iCol)
         physics_sfcprop % alvwf(iCol) = albbck(iCol)
         physics_sfcprop % alnsf(iCol) = albbck(iCol)
@@ -1018,7 +1017,7 @@ contains
         physics_sfcprop % tisfc(iCol)  = skintemp(iCol)
         !physics_sfcprop % tprcp(iCol) =
         physics_sfcprop % srflag(iCol) = 0.0_RKIND
-        !physics_sfcprop % snowd(iCol) =
+        physics_sfcprop % snowd(iCol) = snowh(iCol) * 1000._RKIND 
         physics_sfcprop % shdmin(iCol) = shdmin(iCol)
         physics_sfcprop % shdmax(iCol) = shdmax(iCol)
         !physics_sfcprop % slope(iCol) = ? supposed to be read in from GENPARM.TBL? need to call RUCLSM_SOILVEGPARM at some point?
@@ -1029,8 +1028,8 @@ contains
           physics_sfcprop % scolor(iCol) = 0
         endif
         physics_sfcprop % sncovr(iCol) = snowc(iCol)
-        !physics_sfcprop % snodl(iCol) =
-        !physics_sfcprop % weasdl(iCol) =
+        !physics_sfcprop % snodl(iCol) = snow(iCol)
+        !physics_sfcprop % weasdl(iCol) = snowh(iCol) * 1000._RKIND
         physics_sfcprop % tsfc(iCol) = skintemp(iCol)
         physics_sfcprop % tsfcl(iCol) = skintemp(iCol)
         physics_sfcprop % zorlw(iCol) = znt(iCol)*100.0_RKIND
@@ -1042,9 +1041,9 @@ contains
         physics_sfcprop % albdifnir_lnd(iCol) = sfc_albedo(iCol)
         physics_sfcprop % emis_lnd(iCol) = sfc_emiss(iCol)
         physics_sfcprop % emis_ice(iCol) = sfc_emiss(iCol)
-        !physics_sfcprop % sncovr_ice(iCol) =
-        !physics_sfcprop % snodi(iCol) =
-        !physics_sfcprop % weasdi(iCol) =
+        physics_sfcprop % sncovr_ice(iCol) = snowc(iCol)   ! 0/1
+        physics_sfcprop % snodi(iCol) = snow(iCol)         ! mm
+        physics_sfcprop % weasdi(iCol) = snowh(iCol)*1000. ! m -> mm
         ! sh2o/smois/tslb (GFS_typedefs.F90) are only allocated for RUC
         ! (Model%lsm == Model%lsm_ruc); for Noah/Noah-MP they stay null pointers, so
         ! writing them unconditionally segfaults under lsm=1/2.
@@ -1733,6 +1732,12 @@ contains
     surface%alvwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
     surface%alnsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
     surface%alnwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    ! RUC only turns alvsf/alnsf/... into sfalb_lnd_bck inside lsm_ruc_init;
+    ! lsm_ruc_run takes sfalb_lnd_bck as intent(in). Updating alvsf daily has
+    ! no effect. Update the RUC background directly (land points only):
+    do iCell = 1, nCellsSolve
+       if (landmask(iCell) == 1) surface%sfalb_lnd_bck(iCell) = sfc_albbck(iCell)
+    enddo
     !
     call mpas_log_write(subname //'   Finished updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
  end subroutine ufs_mpas_surface_update
