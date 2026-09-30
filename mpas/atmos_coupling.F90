@@ -924,7 +924,7 @@ contains
     integer :: iCol, iLev, ithread
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer, pointer :: isltyp(:), ivgtyp(:), landmask(:), nSoilLevels
-    real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
+    real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:),lonCell(:),latCell(:)
     real(RKIND), pointer :: albbck(:), skintemp(:), snow(:), snowc(:), snowh(:)
     real(RKIND), pointer :: sst(:), tmn(:), vegfra(:), seaice(:), xice(:), xland(:), znt(:), sfc_albedo(:), canwat(:)
     real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:), sfc_emiss(:)
@@ -943,7 +943,8 @@ contains
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', mesh)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
     !using fv3atm_sfc_io.F90/Sfc_io_transfer() as a template; mpas_init_atm_static.F from MPAS-model for syntax
-
+    call mpas_pool_get_array(mesh,  'latCell',     latCell)
+    call mpas_pool_get_array(mesh,  'lonCell',     lonCell)
     !just grab the data from sfc_input as it exists; will figure out where/how to organize into GFS_typedefs later
     !call mpas_pool_get_array(sfc_input, 'dzs',       dzs) !dim: (nSoilLevels nCells Time); soil layer thickness (m), zs/dzs are
     !initialized in RUC LSM or GFS_typedefs - no need to use the read values
@@ -991,7 +992,6 @@ contains
           end if
         endif
         physics_sfcprop % tsfco(iCol) = sst(iCol)
-        physics_sfcprop % weasd(iCol) = snow(iCol)
         physics_sfcprop % tg3(iCol)   = tmn(iCol)
         physics_sfcprop % zorl(iCol)  = znt(iCol)*100.0_RKIND
         physics_sfcprop % alvsf(iCol) = albbck(iCol)
@@ -1017,7 +1017,6 @@ contains
         physics_sfcprop % tisfc(iCol)  = skintemp(iCol)
         !physics_sfcprop % tprcp(iCol) =
         physics_sfcprop % srflag(iCol) = 0.0_RKIND
-        physics_sfcprop % snowd(iCol) = snowh(iCol) * 1000._RKIND 
         physics_sfcprop % shdmin(iCol) = shdmin(iCol)
         physics_sfcprop % shdmax(iCol) = shdmax(iCol)
         !physics_sfcprop % slope(iCol) = ? supposed to be read in from GENPARM.TBL? need to call RUCLSM_SOILVEGPARM at some point?
@@ -1027,9 +1026,6 @@ contains
         else
           physics_sfcprop % scolor(iCol) = 0
         endif
-        physics_sfcprop % sncovr(iCol) = snowc(iCol)
-        !physics_sfcprop % snodl(iCol) = snow(iCol)
-        !physics_sfcprop % weasdl(iCol) = snowh(iCol) * 1000._RKIND
         physics_sfcprop % tsfc(iCol) = skintemp(iCol)
         physics_sfcprop % tsfcl(iCol) = skintemp(iCol)
         physics_sfcprop % zorlw(iCol) = znt(iCol)*100.0_RKIND
@@ -1041,9 +1037,16 @@ contains
         physics_sfcprop % albdifnir_lnd(iCol) = sfc_albedo(iCol)
         physics_sfcprop % emis_lnd(iCol) = sfc_emiss(iCol)
         physics_sfcprop % emis_ice(iCol) = sfc_emiss(iCol)
-        physics_sfcprop % sncovr_ice(iCol) = snowc(iCol)   ! 0/1
-        physics_sfcprop % snodi(iCol) = snow(iCol)         ! mm
-        physics_sfcprop % weasdi(iCol) = snowh(iCol)*1000. ! m -> mm
+
+        physics_sfcprop % weasd(iCol)  = snow(iCol)                  ! SWE   [kg m-2 = mm]
+        physics_sfcprop % snowd(iCol)  = snowh(iCol) * 1000._RKIND   ! depth [m -> mm]
+        physics_sfcprop % weasdl(iCol) = snow(iCol)                  ! land SWE   [mm]
+        physics_sfcprop % snodl(iCol)  = snowh(iCol) * 1000._RKIND   ! land depth [mm]
+        physics_sfcprop % weasdi(iCol) = snow(iCol)                  ! ice SWE    [mm]
+        physics_sfcprop % snodi(iCol)  = snowh(iCol) * 1000._RKIND   ! ice depth  [mm]
+        physics_sfcprop % sncovr(iCol)     = snowc(iCol)
+        physics_sfcprop % sncovr_ice(iCol) = snowc(iCol)
+        
         ! sh2o/smois/tslb (GFS_typedefs.F90) are only allocated for RUC
         ! (Model%lsm == Model%lsm_ruc); for Noah/Noah-MP they stay null pointers, so
         ! writing them unconditionally segfaults under lsm=1/2.
@@ -1062,7 +1065,16 @@ contains
           physics_sfcprop % smc(iCol, iLev) = smois(iLev, iCol)
           physics_sfcprop % stc(iCol, iLev) = tslb(iLev, iCol)
           !need to define stc, smc, slc instead becasue CCPP version of RUC LSM expects that? set lsoil = lsoil_lsm = 9?
-        end do
+       end do
+       if (abs(latCell(iCol)*57.2958 - 55.) < 0.6 .and. abs(lonCell(iCol)*57.2958 - 260.) < 0.6) then
+          write(0,'(a,i7,2f8.2)') 'SNOWTRACE init iCol lat lon', iCol, latCell(iCol)*57.2958, lonCell(iCol)*57.2958
+          write(0,'(a,4f10.3,i4)') 'SNOWTRACE init MPAS snow snowh snowc snoalb ivgtyp', &
+               snow(iCol), snowh(iCol), snowc(iCol), snoalb(iCol), ivgtyp(iCol)
+          write(0,'(a,8f10.3)')    'SNOWTRACE init UFS  weasdl snodl sncovr slmsk alvsf tsfcl tprcp sr', &
+               physics_sfcprop%weasdl(iCol), physics_sfcprop%snodl(iCol), physics_sfcprop%sncovr(iCol), &
+               physics_sfcprop%slmsk(iCol), physics_sfcprop%alvsf(iCol), physics_sfcprop%tsfcl(iCol), &
+               physics_sfcprop%tprcp(iCol), physics_sfcprop%srflag(iCol)
+       end if
       end do
     end do
 
@@ -1093,10 +1105,10 @@ contains
     type(GFS_sfcprop_type), intent(in) :: physics_sfcprop
     type(GFS_control_type), intent(in) :: physics_control
  
-    type(mpas_pool_type), pointer :: diag_phys
+    type(mpas_pool_type), pointer :: diag_phys,mesh
     integer,  pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     logical,  pointer :: config_frac_seaice
-    real(RKIND), pointer :: sfc_albedo(:), sfc_emiss(:)
+    real(RKIND), pointer :: sfc_albedo(:), sfc_emiss(:),lonCell(:),latCell(:)
     real(RKIND) :: fi
     integer :: iCol, ithread
     real(RKIND), parameter :: alb_wat = 0.08_RKIND, ems_wat = 0.98_RKIND   ! MPAS open-water values
@@ -1109,9 +1121,11 @@ contains
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'cellSolveThreadEnd',   cellSolveThreadEnd)
     call mpas_pool_get_config(domain_ptr % blocklist % configs, 'config_frac_seaice', config_frac_seaice)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
+     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', mesh)
     call mpas_pool_get_array(diag_phys, 'sfc_albedo', sfc_albedo)
     call mpas_pool_get_array(diag_phys, 'sfc_emiss',  sfc_emiss)
- 
+    call mpas_pool_get_array(mesh,  'latCell',     latCell)
+    call mpas_pool_get_array(mesh,  'lonCell',     lonCell)
     do ithread = 1, nThreads
        do iCol = cellSolveThreadStart(ithread), cellSolveThreadEnd(ithread)
           select case (nint(physics_sfcprop%slmsk(iCol)))
@@ -1129,6 +1143,15 @@ contains
              end if
           case default                               ! open water: keep MPAS values (0.08 / 0.98)
           end select
+          if (abs(latCell(iCol)*57.2958 - 55.) < 0.6 .and. abs(lonCell(iCol)*57.2958 - 260.) < 0.6 &
+              .and. ( physics_control%kdt <= 5  .or. mod(physics_control%kdt,5) == 0)) then
+             write(0,'(a,i4,11f10.4)') 'SNOWTRACE kdt weasdl snodl sncovr snoalb bck sfalb_lnd emis_lnd tsfcl sfc_albedo tprcp sr', &
+                  physics_control%kdt, physics_sfcprop%weasdl(iCol), physics_sfcprop%snodl(iCol), &
+                  physics_sfcprop%sncovr(iCol), physics_sfcprop%snoalb(iCol), physics_sfcprop%sfalb_lnd_bck(iCol), &
+                  physics_sfcprop%sfalb_lnd(iCol), physics_sfcprop%emis_lnd(iCol), physics_sfcprop%tsfcl(iCol), &
+                  sfc_albedo(iCol),physics_sfcprop%tprcp(iCol), physics_sfcprop%srflag(iCol)
+          end if
+
        end do
     end do
  

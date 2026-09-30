@@ -307,6 +307,10 @@ contains
          fcst_ntasks, blksz, input_nml_file, constituent_name, constituent_type, restart,         &
          gnx=lonr, gny=latr, p_ref=real(p_ref, MPAS_kind_phys))
 
+    ! Radiation intervals must be integer multiples of the physics time step.
+    call check_radiation_interval('fhswr', UFSATM_control%fhswr, UFSATM_control%dtp)
+    call check_radiation_interval('fhlwr', UFSATM_control%fhlwr, UFSATM_control%dtp)
+    
     !> Read and initialize landuse fields needed by surface physics.
     call ufs_mpas_landuse_read(mpicomm, me, master)
     call ESMF_TimeGet(CurrTime, dayOfYear=doyc, rc=rc)
@@ -424,7 +428,21 @@ contains
     endif
     stop_time = MPI_Wtime()
     radClock = radClock + (stop_time - start_time)
-
+    if (UFSATM_control%lsswr .and. UFSATM_control%me == UFSATM_control%master) then
+       write(0,'(a,i6,1x,i4.4,4i3.2,a,f9.5,a,f7.0,a,f9.5,a,f9.5,a,f9.3)') &
+            'SUNTIME UFS  kdt=', UFSATM_control%kdt,                            &
+            UFSATM_control%jdat(1), UFSATM_control%jdat(2), UFSATM_control%jdat(3), &
+            UFSATM_control%jdat(5), UFSATM_control%jdat(6),                    &
+            ' solhr=', UFSATM_control%solhr,                                   &
+            ' fhswr=', UFSATM_control%fhswr,                                   &
+            ' eot[min]=', UFSATM_control%slag*720._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys, &
+            ' tsolar0[h]=', UFSATM_control%solhr + UFSATM_control%fhswr/7200._MPAS_kind_phys &
+                          + UFSATM_control%slag*12._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys, &
+            ' solcon=', UFSATM_control%solcon
+       write(0,'(a,f9.4)') 'SUNTIME UFS  declination[deg]=', &
+            asin(UFSATM_control%sdec)*180._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys
+    end if
+    
     ! Call CCPP Physics Group
     start_time = MPI_Wtime()
     call CCPP_step (step="physics", nblks=Atmos % nblks, ierr=ierr, dycore='mpas')
@@ -611,4 +629,27 @@ contains
 
   end subroutine get_tracers
 
+  !> ########################################################################################
+  !> Abort if a radiation interval (s) is not an exact multiple of the physics step (s).
+  !>
+  !> ########################################################################################
+  subroutine check_radiation_interval(name, interval, dtp)
+    character(len=*),     intent(in) :: name
+    real(MPAS_kind_phys), intent(in) :: interval, dtp
+    real(MPAS_kind_phys) :: nsteps
+    character(len=*), parameter :: subname = 'atmos_model::check_radiation_interval'
+ 
+    if (interval <= 0.0_MPAS_kind_phys .or. dtp <= 0.0_MPAS_kind_phys) return  ! not set / not used
+ 
+    nsteps = interval / dtp
+    if (abs(nsteps - real(nint(nsteps), MPAS_kind_phys)) > 1.0e-6_MPAS_kind_phys * max(1.0_MPAS_kind_phys, nsteps)) then
+       call mpas_log_write(subname // ': '// trim(name) // ' = $r s is not a multiple of the physics '// &
+            'time step dt_atmos = $r s ($r steps). Radiation would be called every $i steps ($r s) '// &
+            'while the zenith angle is averaged over '// trim(name) // '. Choose '// trim(name) // &
+            ' as an integer multiple of dt_atmos.', &
+            realArgs=(/real(interval,RKIND), real(dtp,RKIND), real(nsteps,RKIND), &
+                       real(max(1,nint(nsteps))*dtp,RKIND)/), &
+            intArgs=(/max(1,nint(nsteps))/), messageType=MPAS_LOG_CRIT)
+    end if
+  end subroutine check_radiation_interval
 end module atmos_model_mod
