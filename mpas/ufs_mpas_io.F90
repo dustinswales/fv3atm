@@ -361,6 +361,11 @@ module ufs_mpas_io
        var_info_type('mol'                             , 'real'      , 1), & !SFC
        var_info_type('rmol'                            , 'real'      , 1), & !SFC
        var_info_type('lh'                              , 'real'      , 1), & !SFC
+       var_info_type('t2m'                             , 'real'      , 1), & !SFC
+       var_info_type('q2'                              , 'real'      , 1), & !SFC
+       var_info_type('skintemp'                        , 'real'      , 1), & !SFC
+       var_info_type('sst'                             , 'real'      , 1), & !SFC
+       var_info_type('precipw'                         , 'real'      , 1), & !DIAG
        !
        var_info_type('hpbl'                            , 'real'      , 1), & !PBL
        var_info_type('kpbl'                            , 'integer'   , 1), & !PBL
@@ -713,7 +718,8 @@ contains
     type(GFS_tbd_type),     intent(in) :: tbd
     type(GFS_sfcprop_type), intent(in) :: surface
     ! Locals
-    type(mpas_pool_type), pointer :: diag_phys
+    type(mpas_pool_type), pointer :: diag_phys, sfc_input
+    real(RKIND), pointer :: t2m(:), q2(:), skintemp(:), sst(:), precipw(:)
     real(RKIND), pointer :: swdnb(:),swdnbc(:),swupb(:),swupbc(:)
     real(RKIND), pointer :: lwdnb(:),lwdnbc(:),lwupb(:),lwupbc(:)
     real(RKIND), pointer :: swdnt(:),swdntc(:),swupt(:),swuptc(:)
@@ -723,7 +729,7 @@ contains
     real(RKIND), pointer :: fm(:),fh(:),chs(:),cqs(:),chs2(:),cqs2(:),lh(:)
     real(RKIND), pointer :: mol(:), rmol(:),zol(:),hpbl(:),kzm(:,:),kzh(:,:),kzq(:,:)
     real(RKIND), pointer :: sh3d(:,:),sm3d(:,:),cldfrac_bl(:,:),qc_bl(:,:),qi_bl(:,:),el_pbl(:,:),qke(:,:),tsq(:,:),qsq(:,:),cov(:,:)
-    real(RKIND), pointer :: refl10cm(:,:)
+    real(RKIND), pointer :: refl10cm(:,:),mavail(:)
     real(RKIND), pointer :: rainc(:),rainnc(:),frainnc(:),snownc(:),graupelnc(:)
     real(RKIND), pointer :: raincv(:),rainncv(:),snowncv(:),graupelncv(:)
     real(RKIND), pointer :: dusfcg(:),dvsfcg(:),dusfc_ls(:),dvsfc_ls(:)
@@ -746,8 +752,14 @@ contains
 
     ! Access MPAS data pools.
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics',  diag_phys)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input', sfc_input)
 
     ! Grab fields from MPAS pools
+    call mpas_pool_get_array(diag_phys,'t2m'       , t2m       )
+    call mpas_pool_get_array(diag_phys,'q2'        , q2        )
+    call mpas_pool_get_array(diag_phys,'precipw'   , precipw   )
+    call mpas_pool_get_array(sfc_input,'skintemp'  , skintemp  )
+    call mpas_pool_get_array(sfc_input,'sst'       , sst       )
     call mpas_pool_get_array(diag_phys,'swdnb'     , swdnb     )
     call mpas_pool_get_array(diag_phys,'swdnbc'    , swdnbc    )
     call mpas_pool_get_array(diag_phys,'swupb'     , swupb     )
@@ -785,6 +797,7 @@ contains
     call mpas_pool_get_array(diag_phys,'ustm'      , ustm      )
     call mpas_pool_get_array(diag_phys,'znt'       , znt       )
     call mpas_pool_get_array(diag_phys,'qsfc'      , qsfc      )
+    call mpas_pool_get_array(diag_phys,'mavail'    , mavail    )
     call mpas_pool_get_array(diag_phys,'fm'        , fm        )
     call mpas_pool_get_array(diag_phys,'fh'        , fh        )
     if (control % do_mynnedmf) then
@@ -906,13 +919,19 @@ contains
           ! --- Surface layer: convert kinematic / rho-weighted UFS fields to MPAS units
           rho_sfc = statein%prsl(iCol,1) / (rd * statein%tgrs(iCol,1) * &
                     (1._RKIND + (rv/rd - 1._RKIND) * statein%qgrs(iCol,1,control%ntqv)))
-          hfx(iCol)    = rho_sfc * cp * surface%hflx(iCol)       ! K m s-1        -> W m-2
-          qfx(iCol)    = rho_sfc * surface%evap(iCol)            ! kg kg-1 m s-1  -> kg m-2 s-1
-          znt(iCol)    = 0.01_RKIND * surface%zorl(iCol)         ! cm             -> m
-          chs(iCol)    = surface%flhc(iCol) / (rho_sfc * cp)     ! W m-2 K-1      -> m s-1
-          cqs(iCol)    = surface%flqc(iCol) / rho_sfc            ! kg m-2 s-1     -> m s-1
-          ust(iCol)    = surface%uustar(iCol)
-          qsfc(iCol)   = surface%qss(iCol)
+          hfx(iCol)      = rho_sfc * cp * surface%hflx(iCol)       ! K m s-1        -> W m-2
+          qfx(iCol)      = rho_sfc * surface%evap(iCol)            ! kg kg-1 m s-1  -> kg m-2 s-1
+          znt(iCol)      = 0.01_RKIND * surface%zorl(iCol)         ! cm             -> m
+          chs(iCol)      = surface%flhc(iCol) / (rho_sfc * cp)     ! W m-2 K-1      -> m s-1
+          cqs(iCol)      = surface%flqc(iCol) / rho_sfc            ! kg m-2 s-1     -> m s-1
+          ust(iCol)      = surface%uustar(iCol)
+          qsfc(iCol)     = surface%qss(iCol)
+          t2m(iCol)      = surface%t2m(iCol)
+          q2(iCol)       = surface%q2m(iCol)
+          skintemp(iCol) = surface%tsfc(iCol)
+          sst(iCol)      = surface%tsfco(iCol)
+          precipw(iCol)  = diagnostics%pwat(iCol)
+          if (nint(surface%slmsk(iCol)) == 1) mavail(iCol) = surface%wetness(iCol)
           ! MONIN-OBUKHOV
           fm(iCol)     = surface%ffmm(iCol)
           fh(iCol)     = surface%ffhh(iCol)

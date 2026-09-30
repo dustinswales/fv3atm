@@ -21,6 +21,7 @@ module atmos_coupling_mod
   public :: ufs_mpas_gwd_to_physics
   public :: ufs_mpas_reference_pressure
   public :: ufs_mpas_surface_update
+  public :: ufs_mpas_ozone_init
 
 contains
   !> #########################################################################################
@@ -59,6 +60,8 @@ contains
     real(kind=RKIND), pointer :: exner(:,:), tracers(:,:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND), pointer :: w(:,:), surface_pressure(:), rho(:,:)
     real(RKIND), pointer :: sfc_albedo(:),sfc_emiss(:)
+    logical, allocatable :: per_kg(:)
+    real(kind=RKIND)     :: rv0
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_physics'
 
     ! Get openMP information
@@ -78,6 +81,10 @@ contains
     call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_dimension(state_pool, 'index_qv',    index_qv)
+
+    ! Identify which scalars need conversion to dry mass or number mixing ratios.
+    allocate(per_kg(num_scalars))
+    call ufs_mpas_per_kg_air_mask(state_pool, num_scalars, per_kg)
 
     ! Grab fields from MPAS pools
     call mpas_pool_get_array(diag_pool,  'uReconstructZonal',      ux)
@@ -104,11 +111,17 @@ contains
     do ithread = 1,nThreads
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
           do iLay = 1,nVertLevels
-             ! Scalars (tracer,layer,col) -> (col,layer,tracer)
+             ! Scalars (tracer,layer,col) -> (col,layer,tracer), per kg dry air -> per kg moist air
+             rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
              do iTracer = 1,num_scalars
-                physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                if (per_kg(iTracer)) then
+                   physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
+                        max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._RKIND + rv0)
+                else
+                   physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                end if
              end do
-
+             
              ! Air denisty (rho) (TODO: Pass to CCPP Physics)
              rho(iCol,iLay) = zz(iLay,iCol) * rho_zz(iLay,iCol)
 
@@ -202,6 +215,7 @@ contains
 
     ! Housekeeping
     deallocate (rho)
+    deallocate (per_kg)
     nullify (mesh_pool)
     nullify (state_pool)
     nullify (diag_pool)
@@ -226,7 +240,7 @@ contains
   subroutine ufs_physics_to_mpas(physics_state, mpas_from_ufs_cnst)
     use GFS_typedefs,       only : GFS_stateout_type
     use mpas_derived_types, only : mpas_pool_type
-    use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
+    use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension, mpas_pool_get_config
     use mpas_constants,     only : rv, rgas, gravity
 
     ! Arguments
@@ -254,7 +268,7 @@ contains
     integer, pointer :: index_nifa => null()
     integer, pointer :: index_nwfa => null()
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
-    integer :: iCol,iLay,ithread
+    integer :: iCol,iLay,ithread,iTracer
     real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
     logical :: debug=.false.
     integer, save :: ncall_p2m = 0
@@ -262,6 +276,13 @@ contains
     character(len=32) :: diag_fname
     type(mpas_pool_type), pointer :: dbg_diag
     real(kind=RKIND), pointer :: dbg_lat(:), dbg_lon(:), dbg_gw(:,:), dbg_ls(:,:), dbg_bl(:,:), dbg_ss(:,:), dbg_fd(:,:)
+    real(kind=RKIND), pointer :: zz_b(:,:), zgrid_b(:,:), lat_b(:), lon_b(:)
+    integer :: i, k
+    real(kind=RKIND) :: Qm
+    logical, allocatable :: per_kg(:)
+    real(kind=RKIND), pointer :: config_dt
+    integer :: iq_v
+    real(kind=8) :: rv0, qv0, qv1, dqv, dq, qx0, den, drdt
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_physics_to_mpas'
 
     ! Get openMP information
@@ -297,6 +318,13 @@ contains
     call mpas_pool_get_dimension(state_pool, 'index_nifa',  index_nifa)
     call mpas_pool_get_dimension(state_pool, 'index_nwfa',  index_nwfa)
 
+    call mpas_pool_get_config(domain_ptr % blocklist % configs, 'config_dt', config_dt)
+
+    ! Identify which scalars need conversion to dry mass or number mixing ratios.
+    allocate(per_kg(num_scalars))
+    call ufs_mpas_per_kg_air_mask(state_pool, num_scalars, per_kg)
+    iq_v = mpas_from_ufs_cnst(index_qv)
+
     ! Grab fields from MPAS pools
     call mpas_pool_get_array(state_pool,'theta_m',          theta_m,1)
     call mpas_pool_get_array(state_pool,'scalars',          scalars,1)
@@ -330,124 +358,44 @@ contains
     !> 1) Update MPAS tendency "tend_scalars".
     !> #####################################################################################
 
-    ! Specific humidity
     do ithread=1,nThreads
       do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-        do iLay = 1,nVertLevels 
-           tend_scalars(index_qv,iLay,iCol) = tend_scalars(index_qv,iLay,iCol) + &
-                physics_state % dqdt(iCol,iLay,index_qv)*mass(iLay,iCol)
+        do iLay = 1,nVertLevels
+          ! State the physics saw (per kg moist air) and its vapour tendency
+          rv0 = max(0._RKIND, scalars(index_qv,iLay,iCol))
+          qv0 = rv0 / (1._8 + rv0)
+          dqv = physics_state % dqdt(iCol,iLay,iq_v)
+          qv1 = qv0 + config_dt*dqv
+          den = (1._8 - qv1) * (1._8 - qv0)
+          do iTracer = 1, num_scalars
+            dq = physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
+            if (per_kg(iTracer)) then
+              qx0  = max(0._RKIND, scalars(iTracer,iLay,iCol)) / (1._8 + rv0)
+              drdt = (dq*(1._8 - qv0) + qx0*dqv) / den           ! d(mixing ratio)/dt
+            else
+              drdt = dq                                          ! e.g. sgs_tke
+            end if
+            tend_scalars(iTracer,iLay,iCol) = tend_scalars(iTracer,iLay,iCol) + &
+                 real(drdt, RKIND) * mass(iLay,iCol)
+          end do
         end do
       end do
     end do
-
-    ! Liquid cloud water
-    if(associated(index_qc)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_qc,iLay,iCol) = tend_scalars(index_qc,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_qc)*mass(iLay,iCol)
+    
+    call mpas_pool_get_array(mesh_pool, 'zz',      zz_b)
+    call mpas_pool_get_array(mesh_pool, 'zgrid',   zgrid_b)
+    call mpas_pool_get_array(mesh_pool, 'latCell', lat_b)
+    call mpas_pool_get_array(mesh_pool, 'lonCell', lon_b)
+    do i = 1, nCellsSolve
+       if (abs(lat_b(i)*57.2958 - 20.) < 0.8 .and. abs(lon_b(i)*57.2958 - 200.) < 0.8) then
+          Qm = 0.
+          do k = 1, nVertLevels
+             Qm = Qm + tend_scalars(index_qv,k,i) * zz_b(k,i) * (zgrid_b(k+1,i) - zgrid_b(k,i))
           end do
-        end do
-      end do
-    end if
-
-    ! Ice cloud water
-    if(associated(index_qi)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_qi,iLay,iCol) = tend_scalars(index_qi,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_qi)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! Rain water
-    if(associated(index_qr)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_qr,iLay,iCol) = tend_scalars(index_qr,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_qr)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! Snow
-    if(associated(index_qs)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_qs,iLay,iCol) = tend_scalars(index_qs,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_qs)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! Graupel
-    if(associated(index_qg)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_qg,iLay,iCol) = tend_scalars(index_qg,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_qg)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! Liquid number concentration
-    if(associated(index_nc)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_nc,iLay,iCol) = tend_scalars(index_nc,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_nc)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! Ice number concentration
-    if(associated(index_ni)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_ni,iLay,iCol) = tend_scalars(index_ni,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_ni)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! "Ice friendly" aerosol number concentration
-    if(associated(index_nifa)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_nifa,iLay,iCol) = tend_scalars(index_nifa,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_nifa)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
-    ! "Water friendly" aerosol number concentration
-    if(associated(index_nwfa)) then
-      do ithread=1,nThreads
-        do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-          do iLay = 1,nVertLevels 
-             tend_scalars(index_nwfa,iLay,iCol) = tend_scalars(index_nwfa,iLay,iCol) + &
-                  physics_state % dqdt(iCol,iLay,index_nwfa)*mass(iLay,iCol)
-          end do
-        end do
-      end do
-    end if
-
+          write(0,'(a,i7,es12.4)') 'QBUDGET MPAS i Qm(column qv tendency into MPAS)', i, Qm
+       end if
+    end do
+    
     ! Update halo points.
     call dyn_mpas_exchange_halo('scalars_tend',.true.)
 
@@ -573,6 +521,7 @@ contains
     enddo
 
     ! Housekeeping
+    deallocate(per_kg)
     deallocate(tend_u_phys)
     nullify (state_pool)
     nullify (mesh_pool)
@@ -616,6 +565,9 @@ contains
     real(kind=RKIND), pointer :: tracers(:,:,:), rt_diabatic_tend(:,:), rho_zz(:,:), theta_m(:,:)
     real(kind=RKIND), pointer :: zz(:,:), zgrid(:,:), exner(:,:), exner_b(:,:), rtheta_b(:,:), theta(:,:)
     real(kind=RKIND), pointer :: rtheta_p(:,:), pressure_b(:,:), pressure_p(:,:), surface_pressure(:), dtheta_dt_mp(:,:)
+    logical, allocatable :: per_kg(:)
+    integer :: iq_v
+    real(kind=8) :: rv0, qv0, qv1, dqv, dq, qx0, den, drdt
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_microphysics_to_mpas'
 
     ! Get openMP information
@@ -637,6 +589,11 @@ contains
     call mpas_pool_get_dimension(state_pool, 'index_qv',    index_qv)
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
+
+    ! Identify which scalars need conversion to dry mass or number mixing ratios.
+    allocate(per_kg(num_scalars))
+    call ufs_mpas_per_kg_air_mask(state_pool, num_scalars, per_kg)
+    iq_v = mpas_from_ufs_cnst(index_qv)
 
     ! Grab fields from MPAS pools
     call mpas_pool_get_array(state_pool, 'scalars',          tracers, timeLevel=1)
@@ -672,9 +629,21 @@ contains
           theta_dyn = theta_m(ilay,iCol)/coeff
           theta(iLay,iCol) = theta_dyn + config_dt * (physics_state % dtdt(iCol,iLay) / exner(iLay,iCol))
           qv_old = tracers(index_qv,iLay,iCol)
-          ! Scalars (col,layer,tracer) -> (tracer,layer,col)
+          ! Old state as the microphysics saw it; must be taken BEFORE any tracer is updated
+          rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
+          qv0 = rv0 / (1._8 + rv0)
+          dqv = physics_state % dqdt(iCol,iLay,iq_v)
+          qv1 = qv0 + config_dt*dqv
+          den = (1._8 - qv1) * (1._8 - qv0)
           do iTracer = 1,num_scalars
-            tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + config_dt * physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer)))
+            dq = physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
+            if (per_kg(iTracer)) then
+              qx0  = max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._8 + rv0)
+              drdt = (dq*(1._8 - qv0) + qx0*dqv) / den
+            else
+              drdt = dq
+            end if
+            tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + real(config_dt*drdt, RKIND))
           end do
 
           ! update the virtual temperature coefficient with updated qv
@@ -716,6 +685,7 @@ contains
     end do
 
     ! Housekeeping
+    deallocate (per_kg)
     nullify (state_pool)
     nullify (mesh_pool)
     nullify (diag_pool)
@@ -748,6 +718,8 @@ contains
     real(kind=RKIND), pointer :: rho_zz(:,:), theta_m(:,:), zz(:,:), zgrid(:,:), exner(:,:)
     real(kind=RKIND), pointer :: tracers(:,:,:), w(:,:), pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND) :: theta, rho
+    logical, allocatable :: per_kg(:)
+    real(kind=RKIND)     :: rv0
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_microphysics'
 
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
@@ -762,6 +734,10 @@ contains
     call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_dimension(state_pool, 'index_qv',    index_qv)
+
+    ! Identify which scalars need conversion to dry mass or number mixing ratios.
+    allocate(per_kg(num_scalars))
+    call ufs_mpas_per_kg_air_mask(state_pool, num_scalars, per_kg)
 
     call mpas_pool_get_array(state_pool, 'rho_zz',  rho_zz,  timeLevel=1)
     call mpas_pool_get_array(state_pool, 'theta_m', theta_m, timeLevel=1)
@@ -778,8 +754,14 @@ contains
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
           do iLay = 1,nVertLevels
              ! Scalars (tracer,layer,col) -> (col,layer,tracer)
+             rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
              do iTracer = 1,num_scalars
-                physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                if (per_kg(iTracer)) then
+                   physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
+                        max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._RKIND + rv0)
+                else
+                   physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                end if
              end do
 
              ! Potential temperature (theta_m -> theta)
@@ -809,6 +791,7 @@ contains
     physics_state % dvdt(:,:)   = 0._RKIND
 
     ! Houzekeeping
+    deallocate(per_kg)
     nullify(diag_pool)
     nullify(mesh_pool)
     nullify(state_pool)
@@ -1766,6 +1749,94 @@ contains
  end subroutine ufs_mpas_surface_update
 
  !> ########################################################################################
+ !> Initialize the prognostic ozone tracer (o3mr) from the ozone data that the 2015 ozone
+ !> photochemistry already uses, when the MPAS initial conditions carry no ozone.
+ !>
+ !>   It fills (a) the MPAS scalar, so the dycore advects it and ufs_mpas_to_physics picks it
+ !>   up on later steps, and (b) Statein%qgrs / Stateout%gq0, because ufs_mpas_to_physics
+ !>   has already copied the (zero) tracer for this first step.
+ !>   Only columns whose ozone is essentially zero are filled, so ICs that do contain ozone
+ !>   (e.g. interpolated from GFS) are left alone.
+ !>
+ !> ######################################################################################## 
+  subroutine ufs_mpas_ozone_init(control, tbd, statein, stateout, mpas_from_ufs_cnst)
+    use GFS_typedefs,       only : GFS_control_type, GFS_tbd_type, GFS_statein_type, GFS_stateout_type
+    use mpas_derived_types, only : mpas_pool_type, MPAS_LOG_WARN, MPAS_LOG_CRIT
+    use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
+    use mpas_log,           only : mpas_log_write
+
+    type(GFS_control_type),  intent(in)    :: control
+    type(GFS_tbd_type),      intent(in)    :: tbd
+    type(GFS_statein_type),  intent(inout) :: statein
+    type(GFS_stateout_type), intent(inout) :: stateout
+    integer, pointer,        intent(in)    :: mpas_from_ufs_cnst(:)
+
+    type(mpas_pool_type), pointer :: state_pool, mesh_pool
+    real(kind=RKIND),     pointer :: scalars(:,:,:)
+    integer,              pointer :: nCellsSolve, nVertLevels, num_scalars
+    integer  :: iCol, iLay, k, kmpas, nfill, nlevoz
+    real(RKIND) :: lnp, w, oz
+    real(RKIND), parameter :: oz_missing = 1.0e-9_RKIND   ! column max below this = no ozone
+    character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_ozone_init'
+
+    if (control%ntoz <= 0) return
+    if (control%oz_coeff < 6) then
+       call mpas_log_write(subname//': ozone forcing data has no climatology coefficient '// &
+            '(oz_coeff < 6, 2006 scheme); o3mr not initialized', messageType=MPAS_LOG_WARN)
+       return
+    end if
+
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', state_pool)
+    call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
+    call mpas_pool_get_dimension(mesh_pool, 'nCellsSolve', nCellsSolve)
+    call mpas_pool_get_dimension(mesh_pool, 'nVertLevels', nVertLevels)
+    call mpas_pool_get_array(state_pool, 'scalars', scalars, timeLevel=1)
+
+    ! MPAS scalar index that holds the UFS ozone tracer
+    kmpas = 0
+    do k = 1, num_scalars
+       if (mpas_from_ufs_cnst(k) == control%ntoz) kmpas = k
+    end do
+    if (kmpas == 0) call mpas_log_write(subname//': no MPAS scalar maps to ntoz', messageType=MPAS_LOG_CRIT)
+
+    nlevoz = control%levozp
+    nfill  = 0
+    do iCol = 1, nCellsSolve
+       if (maxval(statein%qgrs(iCol,:,control%ntoz)) > oz_missing) cycle   ! IC already has ozone
+       nfill = nfill + 1
+       do iLay = 1, nVertLevels
+          ! same log-pressure interpolation as run_o3prog_2015 (po3 decreases with index)
+          lnp = log(statein%prsl(iCol,iLay))
+          if (lnp >= control%ozphys%po3(1)) then
+             oz = tbd%ozpl(iCol,1,6)
+          else if (lnp < control%ozphys%po3(nlevoz)) then
+             oz = tbd%ozpl(iCol,nlevoz,6)
+          else
+             do k = 1, nlevoz-1
+                if (lnp < control%ozphys%po3(k) .and. lnp >= control%ozphys%po3(k+1)) then
+                   w  = (lnp - control%ozphys%po3(k+1)) / (control%ozphys%po3(k) - control%ozphys%po3(k+1))
+                   oz = w*tbd%ozpl(iCol,k,6) + (1.0_RKIND - w)*tbd%ozpl(iCol,k+1,6)
+                   exit
+                end if
+             end do
+          end if
+          oz = max(oz, 0.0_RKIND)
+          scalars(kmpas,iLay,iCol)            = real(oz, RKIND)
+          statein%qgrs(iCol,iLay,control%ntoz) = oz
+          stateout%gq0(iCol,iLay,control%ntoz) = oz
+       end do
+    end do
+
+    ! Update halo points.
+    call dyn_mpas_exchange_halo('scalars',.true.)
+    
+    call mpas_log_write(subname//': initialized o3mr from ozone climatology in $i of $i columns', &
+         intArgs=(/nfill, nCellsSolve/), messageType=MPAS_LOG_WARN)
+
+  end subroutine ufs_mpas_ozone_init
+ 
+ !> ########################################################################################
  !> Procedure to update surface boundary conditions with input SST and fractional sea-ice
  !> coverage.
  !> NOT YET IMPLEMENTED
@@ -1834,6 +1905,31 @@ contains
        enddo
     endif
 
- end subroutine ufs_mpas_sst_update
+  end subroutine ufs_mpas_sst_update
 
+  !> ########################################################################################
+  !> Mask of the MPAS scalars that are "per kg of air" (mass or number mixing ratios) and
+  !> therefore need converting between per kg dry air (MPAS) and per kg moist air (CCPP).
+  !> ########################################################################################
+  subroutine ufs_mpas_per_kg_air_mask(state_pool, num_scalars, mask)
+    use mpas_derived_types, only : mpas_pool_type
+    use mpas_pool_routines, only : mpas_pool_get_dimension
+    type(mpas_pool_type), pointer     :: state_pool
+    integer,              intent(in)  :: num_scalars
+    logical,              intent(out) :: mask(num_scalars)
+    ! Scalars that are not per kg of air. Add to this list if you register others.
+    character(len=16), parameter :: not_per_kg(3) = &
+         [character(len=16) :: 'index_sgs_tke', 'index_sigmab', 'index_cld_amt']
+    integer, pointer :: idx
+    integer :: n
+ 
+    mask(:) = .true.
+    do n = 1, size(not_per_kg)
+       nullify(idx)
+       call mpas_pool_get_dimension(state_pool, trim(not_per_kg(n)), idx)   ! null if not registered
+       if (associated(idx)) then
+          if (idx >= 1 .and. idx <= num_scalars) mask(idx) = .false.
+       end if
+    end do
+  end subroutine ufs_mpas_per_kg_air_mask
 end module atmos_coupling_mod
