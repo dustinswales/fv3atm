@@ -383,7 +383,7 @@ contains
   subroutine atmos_model_radiation_physics(Atmos)
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_physics_to_mpas
     use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_surface_update
-    use atmos_coupling_mod,     only : ufs_mpas_sfc_rad_update
+    use atmos_coupling_mod,     only : ufs_mpas_sfc_rad_update, ufs_mpas_ozone_init
     use ufs_mpas_io,            only : ufs_mpas_phys_diag
     type (atmos_control_type), intent(inout) :: Atmos
     ! Locals
@@ -391,7 +391,10 @@ contains
     real(MPAS_kind_phys) :: start_time, stop_time
     character(len=*), parameter :: subname = 'atmos_model::atmos_model_radiation_physics'
     integer :: jdat(8), rc, doy, moy, dom
-
+    integer :: i, k
+    real(MPAS_kind_phys) :: rho1, E, Qp
+    real(MPAS_kind_phys), parameter :: g = 9.80665, rd = 287.05, fv = 0.6078
+ 
     ! Update physics time
     jdat(:) = 0
     call ESMF_TimeGet (Atmos%CurrTime, YY=jdat(1),MM=jdat(2),DD=jdat(3),H=jdat(5),M=jdat(6),S=jdat(7),rc=rc)
@@ -416,6 +419,12 @@ contains
     stop_time = MPI_Wtime()
     setupClock = setupClock + (stop_time - start_time)
 
+    ! Initialize prognostic ozone tracer. Not needed for restart, since o3mmr comes from restart files.
+    ! DJS2026: UFS-MPAS ICs should include ozone?
+    if (UFSATM_control%first_time_step .and. .not. UFSATM_control%restart) then
+       call ufs_mpas_ozone_init(UFSATM_control, UFSATM_tbd, UFSATM_statein, UFSATM_stateout, mpas_from_ufs_cnst)
+    end if
+    
     ! Call CCPP Radiation Group
     start_time = MPI_Wtime()
     if (UFSATM_control%lsswr .or. UFSATM_control%lslwr) then
@@ -431,6 +440,26 @@ contains
     if (ierr/=0) call mpas_log_write(subname // " ERROR: Call to CCPP physics step failed",messageType=MPAS_LOG_CRIT)
     stop_time = MPI_Wtime()
     physClock = physClock + (stop_time - start_time)
+
+    if (UFSATM_control%kdt <= 10) then
+       do i = 1, size(UFSATM_statein%prsl,1)
+          if (abs(latCell(i)*57.2958 - 20.) < 0.8 .and. abs(lonCell(i)*57.2958 - 200.) < 0.8) then
+             rho1 = UFSATM_statein%prsl(i,1) / (rd*UFSATM_statein%tgrs(i,1)* &
+                  (1. + fv*UFSATM_statein%qgrs(i,1,UFSATM_control%ntqv)))
+             E  = rho1 * UFSATM_sfcprop%evap(i)
+             Qp = 0.
+             do k = 1, size(UFSATM_statein%prsl,2)
+                Qp = Qp + UFSATM_stateout%dqdt(i,k,UFSATM_control%ntqv) * &
+                     (UFSATM_statein%prsi(i,k) - UFSATM_statein%prsi(i,k+1)) / g
+             end do
+             write(0,'(a,i4,i7,3es12.4,f8.3)') 'QBUDGET UFS kdt i E Qp Qp/E ', &
+                  UFSATM_control%kdt, i, E, Qp, Qp/max(E,1.e-12), 0.
+             write(0,'(a,i4,i7,6es11.3)') 'QBUDGET UFS dqdt k=1..3 & slmsk', UFSATM_control%kdt, i, &
+                  UFSATM_stateout%dqdt(i,1:3,UFSATM_control%ntqv), UFSATM_sfcprop%slmsk(i), &
+                  UFSATM_sfcprop%evap(i), rho1
+          end if
+       end do
+    end if
 
     ! Update radiative surface properties from LSM
     call ufs_mpas_sfc_rad_update(UFSATM_sfcprop, UFSATM_control)
