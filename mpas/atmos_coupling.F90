@@ -4,7 +4,7 @@
 !>
 ! ###########################################################################################
 module atmos_coupling_mod
-  use mpas_kind_types, only : strKIND, RKIND
+  use mpas_kind_types, only : strKIND, RKIND, R8KIND
   use ufs_mpas_io,     only : domain_ptr,dyn_mpas_exchange_halo
   use ufs_mpas_io,     only : lucats,lumatch,luseas,lutype,li,albd,slmo,sfem,sfz0,therin,scfx,sfhc
 
@@ -35,8 +35,7 @@ contains
   !> CCPP "state" needed by the physics.
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_to_physics(physics_state, physics_stateout, surface_state, radiation,  &
-       mpas_from_ufs_cnst)
+  subroutine ufs_mpas_to_physics(statein, stateout, surface, radiation, mpas_from_ufs_cnst)
     use GFS_typedefs,         only : GFS_sfcprop_type, GFS_radtend_type
     use GFS_typedefs,         only : GFS_statein_type, GFS_stateout_type
     use mpas_derived_types,   only : mpas_pool_type
@@ -45,9 +44,9 @@ contains
     use mpas_constants,       only : gravity, rvord
 
     ! Arguments
-    type(GFS_statein_type),   intent(inout) :: physics_state
-    type(GFS_stateout_type),  intent(inout) :: physics_stateout
-    type(GFS_sfcprop_type),   intent(inout) :: surface_state
+    type(GFS_statein_type),   intent(inout) :: statein
+    type(GFS_stateout_type),  intent(inout) :: stateout
+    type(GFS_sfcprop_type),   intent(inout) :: surface
     type(GFS_radtend_type),   intent(inout) :: radiation
     integer, pointer,         intent(in   ) :: mpas_from_ufs_cnst(:)
     ! Locals
@@ -115,10 +114,10 @@ contains
              rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
              do iTracer = 1,num_scalars
                 if (per_kg(iTracer)) then
-                   physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
+                   statein % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
                         max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._RKIND + rv0)
                 else
-                   physics_state % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                   statein % qgrs(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
                 end if
              end do
              
@@ -129,51 +128,40 @@ contains
              theta = theta_m(iLay,iCol) / (1._RKIND + rvord * tracers(index_qv,iLay,iCol))
 
              ! Air temperature (theta -> temp)
-             physics_state % tgrs(iCol,iLay)   = theta*exner(iLay,iCol)
+             statein % tgrs(iCol,iLay)   = theta*exner(iLay,iCol)
 
              ! Winds at grid center
-             physics_state % ugrs(iCol,iLay)   = ux(iLay,iCol)
-             physics_state % vgrs(iCol,iLay)   = uy(iLay,iCol)
+             statein % ugrs(iCol,iLay)   = ux(iLay,iCol)
+             statein % vgrs(iCol,iLay)   = uy(iLay,iCol)
 
              ! Layer geopotential and height. CCPP geopotential is relative to the
              ! model surface (FV3: get_phi_fv3 sets phii(:,1) = 0), so subtract the
              ! terrain height zgrid(1,:). Schemes use phil/g as height above ground
              ! (e.g. drag_suite TOFD: zl**(-1.2) -> NaN where the absolute height
              ! is <= 0, i.e. land below sea level).
-             physics_state % phil(iCol,iLay)   = (0.5*(zgrid(iLay+1,iCol)+zgrid(iLay,iCol)) - zgrid(1,iCol))*gravity !(m -> m2/s2)
-             physics_state % zgrid(iCol,iLay)  = 0.5*(zgrid(iLay+1,iCol)+zgrid(iLay,iCol))
+             statein % phil(iCol,iLay)   = (0.5*(zgrid(iLay+1,iCol)+zgrid(iLay,iCol)) - zgrid(1,iCol))*gravity !(m -> m2/s2)
+             statein % zgrid(iCol,iLay)  = 0.5*(zgrid(iLay+1,iCol)+zgrid(iLay,iCol))
 
              ! Level geopotential (surface-relative) and height.
-             physics_state % phii(iCol,iLay)   = (zgrid(iLay,iCol) - zgrid(1,iCol))*gravity !(m -> m2/s2)
-             physics_state % zigrid(iCol,iLay) = zgrid(iLay,iCol)
+             statein % phii(iCol,iLay)   = (zgrid(iLay,iCol) - zgrid(1,iCol))*gravity !(m -> m2/s2)
+             statein % zigrid(iCol,iLay) = zgrid(iLay,iCol)
 
              ! Layer thickness.
-             physics_state % dzgrid(iCol,iLay) = zgrid(iLay+1,iCol) - zgrid(iLay,iCol)
+             statein % dzgrid(iCol,iLay) = zgrid(iLay+1,iCol) - zgrid(iLay,iCol)
 
              ! Exner funciton
-             physics_state % prslk(iCol,iLay)  = exner(iLay,iCol)
+             statein % prslk(iCol,iLay)  = exner(iLay,iCol)
 
              ! MPAS provides vertical velocity at interfaces, compute layer mean, and convert from w -> omega
-             physics_state % vvl(iCol,iLay) =  -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho(iCol,iLay)*gravity
+             statein % vvl(iCol,iLay) =  -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho(iCol,iLay)*gravity
           end do
           do iLay = nVertLevels,nVertLevels+1
-             physics_state % phii(iCol,iLay)     = (zgrid(iLay,iCol) - zgrid(1,iCol))*gravity !(m -> m2/s2)
-             physics_state % zigrid(iCol,iLay)   = zgrid(iLay,iCol)
-             physics_state % dzgrid(iCol,iLay-1) = zgrid(iLay,iCol) - zgrid(iLay-1,iCol)
+             statein % phii(iCol,iLay)     = (zgrid(iLay,iCol) - zgrid(1,iCol))*gravity !(m -> m2/s2)
+             statein % zigrid(iCol,iLay)   = zgrid(iLay,iCol)
+             statein % dzgrid(iCol,iLay-1) = zgrid(iLay,iCol) - zgrid(iLay-1,iCol)
           end do
 
-!          ! Set surface temperature to lowest level temperature (revisit for coupling)
-!          theta = theta_m(1,iCol) / (1._RKIND + rvord * tracers(index_qv,1,iCol))
-!          surface_state % tsfc(iCol) = theta*exner(1,iCol)
-          !
           ! Surface radiative properties
-          ! DJS2026:
-          ! For UFS-FV3, these fields come from set_emis() and set_alb() in
-          ! GFS_radiation_surface.F90. The surface albedo also has spectral dependencies (nIR/uvvus)
-          !
-          ! For UFS-MPAS, these fields come from the MPAS sfc_input pool, which can be updated (daily)
-          ! by calling ufs_mpas_landuse_update. The MPAS surface albedo is broadband,
-          ! so we need to asign the same albedo for all channels in GFS_radiation_surface.
           radiation % salb(iCol)  = sfc_albedo(iCol)
           radiation % semis(iCol) = sfc_emiss(iCol)
        end do
@@ -194,7 +182,7 @@ contains
     end do
 
     ! Compute hydrostatic pressure
-    call ufs_mpas_hydrostatic_pressure(physics_state, tracers(index_qv,:,:),'physics')
+    call ufs_mpas_hydrostatic_pressure(statein, tracers(index_qv,:,:),'physics')
 
     ! DJS: Why do some process-split schemes use one temperature (air_temperature) stored
     !      in GFS_stateout, while others use one (physics_timestep_initial_air_temperature)
@@ -202,16 +190,16 @@ contains
     !      Shouldn't all schemes use "air_temperature"?
     !      "air_temperature" = "physics_timestep_initial_air_temperature" until the state is
     !      updated?
-    physics_stateout % gt0(:,:)   = physics_state % tgrs(:,:)
-    physics_stateout % gq0(:,:,:) = physics_state % qgrs(:,:,:)
-    physics_stateout % gu0(:,:)   = physics_state % ugrs(:,:)
-    physics_stateout % gv0(:,:)   = physics_state % vgrs(:,:)
+    stateout % gt0(:,:)   = statein % tgrs(:,:)
+    stateout % gq0(:,:,:) = statein % qgrs(:,:,:)
+    stateout % gu0(:,:)   = statein % ugrs(:,:)
+    stateout % gv0(:,:)   = statein % vgrs(:,:)
 
     ! Reset tendencies for clean accumulation of the (process-split) physics group tendencies.
-    physics_stateout % dtdt(:,:)   = 0._RKIND
-    physics_stateout % dqdt(:,:,:) = 0._RKIND
-    physics_stateout % dudt(:,:)   = 0._RKIND
-    physics_stateout % dvdt(:,:)   = 0._RKIND
+    stateout % dtdt(:,:)   = 0._RKIND
+    stateout % dqdt(:,:,:) = 0._RKIND
+    stateout % dudt(:,:)   = 0._RKIND
+    stateout % dvdt(:,:)   = 0._RKIND
 
     ! Housekeeping
     deallocate (rho)
@@ -237,14 +225,14 @@ contains
   !> pool, we use tendencies from the CCPP Physics data containers.
   !>
   !> #########################################################################################
-  subroutine ufs_physics_to_mpas(physics_state, mpas_from_ufs_cnst)
+  subroutine ufs_physics_to_mpas(stateout, mpas_from_ufs_cnst)
     use GFS_typedefs,       only : GFS_stateout_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension, mpas_pool_get_config
     use mpas_constants,     only : rv, rgas, gravity
 
     ! Arguments
-    type(GFS_stateout_type), intent(in) :: physics_state
+    type(GFS_stateout_type), intent(in) :: stateout
     integer, pointer,        intent(in) :: mpas_from_ufs_cnst(:)
 
     ! Locals
@@ -270,15 +258,6 @@ contains
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer :: iCol,iLay,ithread,iTracer
     real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
-    logical :: debug=.false.
-    integer, save :: ncall_p2m = 0
-    integer :: diag_unit, nbad
-    character(len=32) :: diag_fname
-    type(mpas_pool_type), pointer :: dbg_diag
-    real(kind=RKIND), pointer :: dbg_lat(:), dbg_lon(:), dbg_gw(:,:), dbg_ls(:,:), dbg_bl(:,:), dbg_ss(:,:), dbg_fd(:,:)
-    real(kind=RKIND), pointer :: zz_b(:,:), zgrid_b(:,:), lat_b(:), lon_b(:)
-    integer :: i, k
-    real(kind=RKIND) :: Qm
     logical, allocatable :: per_kg(:)
     real(kind=RKIND), pointer :: config_dt
     integer :: iq_v
@@ -361,17 +340,17 @@ contains
     do ithread=1,nThreads
       do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
         do iLay = 1,nVertLevels
-          ! State the physics saw (per kg moist air) and its vapour tendency
+          ! State the physics saw (per kg moist air) and its vapor tendency
           rv0 = max(0._RKIND, scalars(index_qv,iLay,iCol))
-          qv0 = rv0 / (1._8 + rv0)
-          dqv = physics_state % dqdt(iCol,iLay,iq_v)
+          qv0 = rv0 / (1._R8KIND + rv0)
+          dqv = stateout % dqdt(iCol,iLay,iq_v)
           qv1 = qv0 + config_dt*dqv
-          den = (1._8 - qv1) * (1._8 - qv0)
+          den = (1._R8KIND - qv1) * (1._R8KIND - qv0)
           do iTracer = 1, num_scalars
-            dq = physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
+            dq = stateout % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
             if (per_kg(iTracer)) then
-              qx0  = max(0._RKIND, scalars(iTracer,iLay,iCol)) / (1._8 + rv0)
-              drdt = (dq*(1._8 - qv0) + qx0*dqv) / den           ! d(mixing ratio)/dt
+              qx0  = max(0._RKIND, scalars(iTracer,iLay,iCol)) / (1._R8KIND + rv0)
+              drdt = (dq*(1._R8KIND - qv0) + qx0*dqv) / den      ! d(mixing ratio)/dt
             else
               drdt = dq                                          ! e.g. sgs_tke
             end if
@@ -380,20 +359,6 @@ contains
           end do
         end do
       end do
-    end do
-    
-    call mpas_pool_get_array(mesh_pool, 'zz',      zz_b)
-    call mpas_pool_get_array(mesh_pool, 'zgrid',   zgrid_b)
-    call mpas_pool_get_array(mesh_pool, 'latCell', lat_b)
-    call mpas_pool_get_array(mesh_pool, 'lonCell', lon_b)
-    do i = 1, nCellsSolve
-       if (abs(lat_b(i)*57.2958 - 20.) < 0.8 .and. abs(lon_b(i)*57.2958 - 200.) < 0.8) then
-          Qm = 0.
-          do k = 1, nVertLevels
-             Qm = Qm + tend_scalars(index_qv,k,i) * zz_b(k,i) * (zgrid_b(k+1,i) - zgrid_b(k,i))
-          end do
-          write(0,'(a,i7,es12.4)') 'QBUDGET MPAS i Qm(column qv tendency into MPAS)', i, Qm
-       end if
     end do
     
     ! Update halo points.
@@ -408,7 +373,7 @@ contains
           do iLay = 1, nVertLevels
              ! Add accumulated temperature tendencies from the physics group, convert from temperature
              ! to rho*potential temperature (T -> rtheta). 
-             tend_th_phys = (physics_state % dtdt(iCol,iLay)/exner(iLay,iCol))*mass(iLay,iCol)
+             tend_th_phys = (stateout % dtdt(iCol,iLay)/exner(iLay,iCol))*mass(iLay,iCol)
              coeff = (1. + rv/rgas * scalars(index_qv,iLay,iCol))
              ! Convert from the tendency of potential temperature to the tendency of the  modified
              ! potential temperature (rtheta -> rtheta_m). 
@@ -429,15 +394,15 @@ contains
     do ithread = 1,nThreads
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
            do iLay = 1, nVertLevels
-              tend_uzonal(iLay,iCol) = physics_state % dudt(iCol,iLay)
-              tend_umerid(iLay,iCol) = physics_state % dvdt(iCol,iLay)
+              tend_uzonal(iLay,iCol) = stateout % dudt(iCol,iLay)
+              tend_umerid(iLay,iCol) = stateout % dvdt(iCol,iLay)
            end do
        end do
     end do
 
     ! Next, update the halo points of the scratch arrays.
-    call dyn_mpas_exchange_halo('tend_uzonal',debug)
-    call dyn_mpas_exchange_halo('tend_umerid',debug)
+    call dyn_mpas_exchange_halo('tend_uzonal',.true.)
+    call dyn_mpas_exchange_halo('tend_umerid',.true.)
 
     ! Finally, compute wind tendency at grid-edges.
     call tend_toEdges(mesh_pool, tend_uzonal, tend_umerid, tend_u_phys)
@@ -448,56 +413,6 @@ contains
           tend_ru_phys(iLay,iCol) = tend_u_phys(iLay,iCol)*mass_edge(iLay,iCol)
        end do
     end do
-
-    ! Temporary diagnostics for the first few physics steps (per rank, to stderr):
-    ! range and NaN count of the physics wind tendency on owned cells, of the
-    ! halo cells filled by the exchange above, and of the edge tendency handed to
-    ! the dynamics. Remove once the momentum path is validated.
-    ncall_p2m = ncall_p2m + 1
-    if (ncall_p2m <= 3) then
-       write(diag_fname,'(a,i4.4)') 'bridge_diag.rank', domain_ptr % dminfo % my_proc_id
-       open(newunit=diag_unit, file=trim(diag_fname), position='append', action='write')
-       write(diag_unit,'(a,i0,a,i0,a,2es11.3,a,i0)') 'p2m step ', ncall_p2m, ' rank ', domain_ptr % dminfo % my_proc_id, &
-            ' dudt owned  min/max ', minval(physics_state % dudt(1:nCellsSolve,:)), maxval(physics_state % dudt(1:nCellsSolve,:)), &
-            ' nan ', count(physics_state % dudt(1:nCellsSolve,:) /= physics_state % dudt(1:nCellsSolve,:))
-       write(diag_unit,'(a,i0,a,i0,a,2es11.3,a,i0)') 'p2m step ', ncall_p2m, ' rank ', domain_ptr % dminfo % my_proc_id, &
-            ' dvdt owned  min/max ', minval(physics_state % dvdt(1:nCellsSolve,:)), maxval(physics_state % dvdt(1:nCellsSolve,:)), &
-            ' nan ', count(physics_state % dvdt(1:nCellsSolve,:) /= physics_state % dvdt(1:nCellsSolve,:))
-       if (nCells > nCellsSolve) then
-          write(diag_unit,'(a,i0,a,i0,a,2es11.3,a,i0)') 'p2m step ', ncall_p2m, ' rank ', domain_ptr % dminfo % my_proc_id, &
-               ' uzonal halo min/max ', minval(tend_uzonal(:,nCellsSolve+1:nCells)), maxval(tend_uzonal(:,nCellsSolve+1:nCells)), &
-               ' nan ', count(tend_uzonal(:,nCellsSolve+1:nCells) /= tend_uzonal(:,nCellsSolve+1:nCells))
-       end if
-       write(diag_unit,'(a,i0,a,i0,a,2es11.3,a,i0)') 'p2m step ', ncall_p2m, ' rank ', domain_ptr % dminfo % my_proc_id, &
-            ' tend_ru_physics owned edges min/max ', minval(tend_ru_phys(:,1:nEdgesSolve)), maxval(tend_ru_phys(:,1:nEdgesSolve)), &
-            ' nan ', count(tend_ru_phys(:,1:nEdgesSolve) /= tend_ru_phys(:,1:nEdgesSolve))
-       write(diag_unit,'(a,i0,a,i0,a,2es11.3)') 'p2m step ', ncall_p2m, ' rank ', domain_ptr % dminfo % my_proc_id, &
-            ' rho_edge owned edges min/max ', minval(mass_edge(:,1:nEdgesSolve)), maxval(mass_edge(:,1:nEdgesSolve))
-       ! Locate NaN points in the physics wind tendency and print the GWD components
-       ! (from the diag_physics pool, filled by ufs_mpas_phys_diag just before this call).
-       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', dbg_diag)
-       call mpas_pool_get_array(mesh_pool, 'latCell', dbg_lat)
-       call mpas_pool_get_array(mesh_pool, 'lonCell', dbg_lon)
-       call mpas_pool_get_array(dbg_diag, 'dtaux3d',    dbg_gw)
-       call mpas_pool_get_array(dbg_diag, 'dtaux3d_ls', dbg_ls)
-       call mpas_pool_get_array(dbg_diag, 'dtaux3d_bl', dbg_bl)
-       call mpas_pool_get_array(dbg_diag, 'dtaux3d_ss', dbg_ss)
-       call mpas_pool_get_array(dbg_diag, 'dtaux3d_fd', dbg_fd)
-       nbad = 0
-       do iCol = 1, nCellsSolve
-          do iLay = 1, nVertLevels
-             if (physics_state % dudt(iCol,iLay) /= physics_state % dudt(iCol,iLay) .and. nbad < 20) then
-                nbad = nbad + 1
-                write(diag_unit,'(a,i0,a,i0,a,i0,a,i0,a,2f9.3,a,5es11.3)') 'p2m NaN rank ', domain_ptr % dminfo % my_proc_id, &
-                     ' iCol ', iCol, ' iLay ', iLay, ' nan-in-column ', &
-                     count(physics_state % dudt(iCol,:) /= physics_state % dudt(iCol,:)), &
-                     ' lat/lon ', dbg_lat(iCol)*57.29578_RKIND, dbg_lon(iCol)*57.29578_RKIND, &
-                     ' dudt_gw/ls/bl/ss/fd ', dbg_gw(iLay,iCol), dbg_ls(iLay,iCol), dbg_bl(iLay,iCol), dbg_ss(iLay,iCol), dbg_fd(iLay,iCol)
-             end if
-          end do
-       end do
-       close(diag_unit)
-    end if
 
     ! Update halo points.
     call dyn_mpas_exchange_halo('tend_ru_physics',.true.)
@@ -542,7 +457,7 @@ contains
   !> Additionally, update any other fields needed by the dynamics (e.g., theta_m, rtheta_p)
   !>
   !> #########################################################################################
-  subroutine ufs_microphysics_to_mpas(physics_state, mpas_from_ufs_cnst)
+  subroutine ufs_microphysics_to_mpas(stateout, mpas_from_ufs_cnst)
     use GFS_typedefs,       only : GFS_stateout_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array
@@ -550,7 +465,7 @@ contains
     use mpas_constants,     only : gravity, rvord, rv, rgas, p0, cp
 
     ! Arguments
-    type(GFS_stateout_type), intent(in) :: physics_state
+    type(GFS_stateout_type), intent(in) :: stateout
     integer, pointer,        intent(in) :: mpas_from_ufs_cnst(:)
 
     ! Locals
@@ -627,28 +542,27 @@ contains
           ! Update potential temperature (theta) with microphysics tendency
           coeff = (1._RKIND + rvord * tracers(index_qv,iLay,iCol))
           theta_dyn = theta_m(ilay,iCol)/coeff
-          theta(iLay,iCol) = theta_dyn + config_dt * (physics_state % dtdt(iCol,iLay) / exner(iLay,iCol))
+          theta(iLay,iCol) = theta_dyn + config_dt * (stateout % dtdt(iCol,iLay) / exner(iLay,iCol))
           qv_old = tracers(index_qv,iLay,iCol)
           ! Old state as the microphysics saw it; must be taken BEFORE any tracer is updated
           rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
-          qv0 = rv0 / (1._8 + rv0)
-          dqv = physics_state % dqdt(iCol,iLay,iq_v)
+          qv0 = rv0 / (1._R8KIND + rv0)
+          dqv = stateout % dqdt(iCol,iLay,iq_v)
           qv1 = qv0 + config_dt*dqv
-          den = (1._8 - qv1) * (1._8 - qv0)
+          den = (1._R8KIND - qv1) * (1._R8KIND - qv0)
           do iTracer = 1,num_scalars
-            dq = physics_state % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
+            dq = stateout % dqdt(iCol,iLay,mpas_from_ufs_cnst(iTracer))
             if (per_kg(iTracer)) then
-              qx0  = max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._8 + rv0)
-              drdt = (dq*(1._8 - qv0) + qx0*dqv) / den
+              qx0  = max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._R8KIND + rv0)
+              drdt = (dq*(1._R8KIND - qv0) + qx0*dqv) / den
             else
               drdt = dq
             end if
             tracers(iTracer,iLay,iCol) = max(0._RKIND, tracers(iTracer,iLay,iCol) + real(config_dt*drdt, RKIND))
           end do
 
-          ! update the virtual temperature coefficient with updated qv
-          coeff = (1._RKIND + rvord * tracers(index_qv,iLay,iCol))
           ! Modified potential temperature (theta ->theta_m)
+          coeff = (1._RKIND + rvord * tracers(index_qv,iLay,iCol))
           theta_m(iLay,iCol) = theta(iLay,iCol)*coeff
 
           ! Now compute diabatic heating due to microphsyics, save for next time step
@@ -699,15 +613,15 @@ contains
   !> Analogous to microphysics_from_MPAS in src/core_atmosphere/physics/mpas_atmphys_interface.F
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_to_microphysics(physics_state, physics_statein, mpas_from_ufs_cnst)
+  subroutine ufs_mpas_to_microphysics(stateout, statein, mpas_from_ufs_cnst)
     use GFS_typedefs,         only : GFS_stateout_type, GFS_statein_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_array, mpas_pool_get_dimension
     use mpas_constants,       only : rvord, gravity
 
     ! Arguments
-    type(GFS_stateout_type), intent(inout) :: physics_state
-    type(GFS_statein_type),  intent(inout) :: physics_statein
+    type(GFS_stateout_type), intent(inout) :: stateout
+    type(GFS_statein_type),  intent(inout) :: statein
     integer, pointer,        intent(in   ) :: mpas_from_ufs_cnst(:)
 
     ! Locals
@@ -722,14 +636,17 @@ contains
     real(kind=RKIND)     :: rv0
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_to_microphysics'
 
+    ! Get openMP information
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'nThreads',             nThreads)
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadStart', cellSolveThreadStart)
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadEnd',   cellSolveThreadEnd)
 
+    ! Access MPAS data pools
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', state_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag',  diag_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
 
+    ! MPAS dimensions
     call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
     call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
     call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
@@ -739,6 +656,7 @@ contains
     allocate(per_kg(num_scalars))
     call ufs_mpas_per_kg_air_mask(state_pool, num_scalars, per_kg)
 
+    ! Grab fields from MPAS pools
     call mpas_pool_get_array(state_pool, 'rho_zz',  rho_zz,  timeLevel=1)
     call mpas_pool_get_array(state_pool, 'theta_m', theta_m, timeLevel=1)
     call mpas_pool_get_array(state_pool, 'scalars', tracers, timeLevel=1)
@@ -757,10 +675,10 @@ contains
              rv0 = max(0._RKIND, tracers(index_qv,iLay,iCol))
              do iTracer = 1,num_scalars
                 if (per_kg(iTracer)) then
-                   physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
+                   stateout % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = &
                         max(0._RKIND, tracers(iTracer,iLay,iCol)) / (1._RKIND + rv0)
                 else
-                   physics_state % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
+                   stateout % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) = max(0._RKIND, tracers(iTracer,iLay,iCol))
                 end if
              end do
 
@@ -768,27 +686,27 @@ contains
              theta = theta_m(iLay,iCol) / (1._RKIND + rvord * max(0._RKIND,tracers(index_qv,iLay,iCol)))
 
              ! Air temperature (theta -> t)
-             physics_state % gt0(iCol,iLay) = theta*exner(iLay,iCol)
+             stateout % gt0(iCol,iLay) = theta*exner(iLay,iCol)
 
              ! Vertical velocity (w -> omega)
              rho = zz(iLay,iCol) * rho_zz(iLay,iCol)
-             physics_statein % vvl(iCol,iLay) = -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho*gravity
+             statein % vvl(iCol,iLay) = -0.5*(w(iLay,iCol) + w(iLay+1,iCol))*rho*gravity
 
              ! Non-hydrostatic pressure
-             physics_statein % prsl(iCol,iLay) = pressure_p(iLay,iCol) + pressure_b(iLay,iCol)
-             physics_statein % prsi(iCol,iLay) = exner(iLay,iCol)
+             statein % prsl(iCol,iLay) = pressure_p(iLay,iCol) + pressure_b(iLay,iCol)
+             statein % prsi(iCol,iLay) = exner(iLay,iCol)
           end do
        end do
     end do
 
     ! Update hydrostatic pressure. NO. MP in MPAS uses full non-hydrostatic pressure.    
-    call ufs_mpas_hydrostatic_pressure(physics_statein, tracers(index_qv,:,:),'microphysics')
+    call ufs_mpas_hydrostatic_pressure(statein, tracers(index_qv,:,:),'microphysics')
 
     ! Reset tendencies for clean accumulation of ONLY the microphysics tendencies.
-    physics_state % dtdt(:,:)   = 0._RKIND
-    physics_state % dqdt(:,:,:) = 0._RKIND
-    physics_state % dudt(:,:)   = 0._RKIND
-    physics_state % dvdt(:,:)   = 0._RKIND
+    stateout % dtdt(:,:)   = 0._RKIND
+    stateout % dqdt(:,:,:) = 0._RKIND
+    stateout % dudt(:,:)   = 0._RKIND
+    stateout % dvdt(:,:)   = 0._RKIND
 
     ! Houzekeeping
     deallocate(per_kg)
@@ -833,6 +751,7 @@ contains
     ! Access MPAS data pools.
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
 
+    ! Grab fields from MPAS pools
     call mpas_pool_get_array(mesh_pool,  'latCell',     lat)
     call mpas_pool_get_array(mesh_pool,  'lonCell',     lon)
     call mpas_pool_get_array(mesh_pool,  'areaCell',    area)
@@ -878,7 +797,6 @@ contains
           physics_grid % xlon(i)   = lon(i)
           physics_grid % xlat_d(i) = physics_grid % xlat(i) * rad2deg
           physics_grid % xlon_d(i) = physics_grid % xlon(i) * rad2deg
-         ! write(*,*) 'ithread, i, xlat, xlon, xlat_d, xlon_d',ithread, i, physics_grid % xlat(i),physics_grid % xlon(i),physics_grid % xlat_d(i),physics_grid % xlon_d(i)
           physics_grid % sinlat(i) = sin(physics_grid % xlat(i))
           physics_grid % coslat(i) = sqrt(1.0_RKIND - physics_grid % sinlat(i) * physics_grid % sinlat(i))
           physics_grid % area(i)   = area(i)
@@ -893,7 +811,7 @@ contains
 !> Procedure to transfer MPAS information to physics srfprop DDT
 !>
 !> #########################################################################################
-  subroutine ufs_mpas_sfc_to_physics(physics_sfcprop, physics_control)
+  subroutine ufs_mpas_sfc_to_physics(surface, physics_control)
     use GFS_typedefs,         only : GFS_sfcprop_type, GFS_control_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension, mpas_pool_get_array
@@ -901,13 +819,13 @@ contains
 
     ! Arguments
     type(GFS_control_type),      intent(in) :: physics_control
-    type(GFS_sfcprop_type),      intent(inout) :: physics_sfcprop
+    type(GFS_sfcprop_type),      intent(inout) :: surface
     ! Locals
     type(mpas_pool_type), pointer :: sfc_input, mesh, diag_phys
     integer :: iCol, iLev, ithread
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer, pointer :: isltyp(:), ivgtyp(:), landmask(:), nSoilLevels
-    real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:),lonCell(:),latCell(:)
+    real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
     real(RKIND), pointer :: albbck(:), skintemp(:), snow(:), snowc(:), snowh(:)
     real(RKIND), pointer :: sst(:), tmn(:), vegfra(:), seaice(:), xice(:), xland(:), znt(:), sfc_albedo(:), canwat(:)
     real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:), sfc_emiss(:)
@@ -925,119 +843,106 @@ contains
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input', sfc_input)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', mesh)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
-    !using fv3atm_sfc_io.F90/Sfc_io_transfer() as a template; mpas_init_atm_static.F from MPAS-model for syntax
-    call mpas_pool_get_array(mesh,  'latCell',     latCell)
-    call mpas_pool_get_array(mesh,  'lonCell',     lonCell)
-    !just grab the data from sfc_input as it exists; will figure out where/how to organize into GFS_typedefs later
-    !call mpas_pool_get_array(sfc_input, 'dzs',       dzs) !dim: (nSoilLevels nCells Time); soil layer thickness (m), zs/dzs are
-    !initialized in RUC LSM or GFS_typedefs - no need to use the read values
-    call mpas_pool_get_array(sfc_input, 'isltyp',    isltyp) !dim (nCells); dominant soil category
-    call mpas_pool_get_array(sfc_input, 'ivgtyp',    ivgtyp) !dim (nCells); dominant vegetation category
-    call mpas_pool_get_array(sfc_input, 'landmask',  landmask) !dim (nCells); land-ocean mask (1=land ; 0=ocean)
-    call mpas_pool_get_array(sfc_input, 'mminlu',    mminlu) ! (string) land use classification
-    call mpas_pool_get_array(sfc_input, 'sfc_albbck',albbck) !dim (nCells Time); background surface albedo
-    call mpas_pool_get_array(sfc_input, 'sh2o',      sh2o)  !dim (nSoilLevels nCells Time); soil equivalent liquid water (m3 m^{-3})
-    call mpas_pool_get_array(sfc_input, 'smois',     smois) !dim (nSoilLevels nCells Time); soil moisture (m3 m^{-3})
-    call mpas_pool_get_array(sfc_input, 'skintemp',  skintemp) !dim (nCells Time); ground or water surface temperature (K)
-    call mpas_pool_get_array(sfc_input, 'snow',      snow) !dim (nCells Time); snow water equivalent (kg m^-2)
-    call mpas_pool_get_array(sfc_input, 'snowc',     snowc) !dim (nCells Time); flag for snow on ground (=0 no snow; =1,otherwise
-    call mpas_pool_get_array(sfc_input, 'snowh',     snowh) !dim (nCells Time); physical snow depth (m)
-    call mpas_pool_get_array(sfc_input, 'sst',       sst)   !dim (nCells Time); sea-surface temperature (K)
-    call mpas_pool_get_array(sfc_input, 'ter',       ter)   !dim (nCells); terrain height (m)
-    call mpas_pool_get_array(sfc_input, 'tmn' ,      tmn)   !dim (nCells Time); deep soil temperature (K)
-    call mpas_pool_get_array(sfc_input, 'tslb',      tslb)  !dim (nSoilLevels nCells Time); soil layer temperature (K)
-    call mpas_pool_get_array(sfc_input, 'vegfra',    vegfra) !dim (nCells Time); vegetation fraction (percent)
-    call mpas_pool_get_array(sfc_input, 'seaice',    seaice) !dim (nCells Time); sea-ice flag (0=no seaice; =1 otherwise)
-    call mpas_pool_get_array(sfc_input, 'xice',      xice) !dim (nCells Time); fractional area coverage of sea-ice
-    call mpas_pool_get_array(sfc_input, 'xland',     xland) !dim (nCells Time); land-ocean mask (1=land including sea-ice ; 2=ocean)
-    call mpas_pool_get_array(sfc_input, 'shdmin',    shdmin) !dim (nCells); minimum fractional coverage of annual green vegetation fraction (percent)
-    call mpas_pool_get_array(sfc_input, 'shdmax',    shdmax) !dim (nCells); maximum fractional coverage of annual green vegetation fraction (percent)
-    call mpas_pool_get_array(sfc_input, 'snoalb',    snoalb) !dim (nCells); annual maximum snow albedo
+
+    ! Grab fields from MPAS pools    
+    call mpas_pool_get_array(sfc_input, 'isltyp',    isltyp)    !dim (nCells); dominant soil category
+    call mpas_pool_get_array(sfc_input, 'ivgtyp',    ivgtyp)    !dim (nCells); dominant vegetation category
+    call mpas_pool_get_array(sfc_input, 'landmask',  landmask)  !dim (nCells); land-ocean mask (1=land ; 0=ocean)
+    call mpas_pool_get_array(sfc_input, 'mminlu',    mminlu)    ! (string) land use classification
+    call mpas_pool_get_array(sfc_input, 'sfc_albbck',albbck)    !dim (nCells Time); background surface albedo
+    call mpas_pool_get_array(sfc_input, 'sh2o',      sh2o)      !dim (nSoilLevels nCells Time); soil equivalent liquid water (m3 m^{-3})
+    call mpas_pool_get_array(sfc_input, 'smois',     smois)     !dim (nSoilLevels nCells Time); soil moisture (m3 m^{-3})
+    call mpas_pool_get_array(sfc_input, 'skintemp',  skintemp)  !dim (nCells Time); ground or water surface temperature (K)
+    call mpas_pool_get_array(sfc_input, 'snow',      snow)      !dim (nCells Time); snow water equivalent (kg m^-2)
+    call mpas_pool_get_array(sfc_input, 'snowc',     snowc)     !dim (nCells Time); flag for snow on ground (=0 no snow; =1,otherwise
+    call mpas_pool_get_array(sfc_input, 'snowh',     snowh)     !dim (nCells Time); physical snow depth (m)
+    call mpas_pool_get_array(sfc_input, 'sst',       sst)       !dim (nCells Time); sea-surface temperature (K)
+    call mpas_pool_get_array(sfc_input, 'ter',       ter)       !dim (nCells); terrain height (m)
+    call mpas_pool_get_array(sfc_input, 'tmn' ,      tmn)       !dim (nCells Time); deep soil temperature (K)
+    call mpas_pool_get_array(sfc_input, 'tslb',      tslb)      !dim (nSoilLevels nCells Time); soil layer temperature (K)
+    call mpas_pool_get_array(sfc_input, 'vegfra',    vegfra)    !dim (nCells Time); vegetation fraction (percent)
+    call mpas_pool_get_array(sfc_input, 'seaice',    seaice)    !dim (nCells Time); sea-ice flag (0=no seaice; =1 otherwise)
+    call mpas_pool_get_array(sfc_input, 'xice',      xice)      !dim (nCells Time); fractional area coverage of sea-ice
+    call mpas_pool_get_array(sfc_input, 'xland',     xland)     !dim (nCells Time); land-ocean mask (1=land including sea-ice ; 2=ocean)
+    call mpas_pool_get_array(sfc_input, 'shdmin',    shdmin)    !dim (nCells); minimum fractional coverage of annual green vegetation fraction (percent)
+    call mpas_pool_get_array(sfc_input, 'shdmax',    shdmax)    !dim (nCells); maximum fractional coverage of annual green vegetation fraction (percent)
+    call mpas_pool_get_array(sfc_input, 'snoalb',    snoalb)    !dim (nCells); annual maximum snow albedo
     call mpas_pool_get_array(sfc_input, 'greenfrac', greenfrac) !dim (nMonths nCells); monthly-mean climatological greenness fraction (percent)
     call mpas_pool_get_array(sfc_input, 'albedo12m', albedo12m) !dim (nMonhts nCells); monthly-mean climatological surface albedo (percent)
-    call mpas_pool_get_array(sfc_input, 'canwat',    canwat) !dim (nCells); water in canopy (kg m^-2)
+    call mpas_pool_get_array(sfc_input, 'canwat',    canwat)    !dim (nCells); water in canopy (kg m^-2)
     call mpas_pool_get_array(sfc_input, 'landusef',  landusef)
     call mpas_pool_get_array(sfc_input, 'soilf',     soilf)
-
-    call mpas_pool_get_array(diag_phys, 'znt',       znt) !dim (nCells); roughness length (m)
-    call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo ) !dim (nCells); surface albedo (fraction)
-    call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss )
+    call mpas_pool_get_array(diag_phys, 'znt',       znt)       !dim (nCells); roughness length (m)
+    call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo)!dim (nCells); surface albedo (fraction)
+    call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss)
 
     do ithread = 1,nThreads
       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
-        if (landmask(iCol) == 1) then
-          physics_sfcprop % slmsk(iCol) = 1.0_RKIND
-          physics_sfcprop % landfrac(iCol) = 1.0_RKIND
-        else
-          physics_sfcprop % oceanfrac(iCol) = 1.0_RKIND
-          if (seaice(iCol) > 0.0_RKIND) then
-            physics_sfcprop % slmsk(iCol) = 2.0_RKIND
-          end if
-        endif
-        physics_sfcprop % tsfco(iCol) = sst(iCol)
-        physics_sfcprop % tg3(iCol)   = tmn(iCol)
-        physics_sfcprop % zorl(iCol)  = znt(iCol)*100.0_RKIND
-        physics_sfcprop % alvsf(iCol) = albbck(iCol)
-        physics_sfcprop % alvwf(iCol) = albbck(iCol)
-        physics_sfcprop % alnsf(iCol) = albbck(iCol)
-        physics_sfcprop % alnwf(iCol) = albbck(iCol)
-        physics_sfcprop % facsf(iCol) = 0.5!? - from gcycle?
-        physics_sfcprop % facwf(iCol) = 0.5!? - from gcycle?
-        physics_sfcprop % vfrac(iCol) = vegfra(iCol)*0.01_RKIND !conversion to decimal from percent
-        physics_sfcprop % canopy(iCol)= canwat(iCol)
-        !physics_sfcprop % f10m(iCol)  = 0.0_RKIND !no input in ICs; intent(out) in sfc_diag.F
-        !physics_sfcprop % t2m(iCol)   = 0.0_RKIND !no input in ICs; intent(out) in sfc_diag.F
-        !physics_sfcprop % q2m(iCol)   = 0.0_RKIND !no input in ICs; intent(out) in sfc_diag.F
-        physics_sfcprop % vtype(iCol) = ivgtyp(iCol)
-        physics_sfcprop % stype(iCol) = isltyp(iCol)
-        physics_sfcprop % vegtype_frac(iCol,:)  = landusef(:,iCol)
-        physics_sfcprop % soiltype_frac(iCol,:) = soilf(:,iCol)
-        !physics_sfcprop % uustar(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme; found in diag_phys pool
-        !physics_sfcprop % ffmm(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme
-        !physics_sfcprop % ffhh(iCol) = 0.0_RKIND !no input in ICs; intent(inout) in surface layer scheme
-        !physics_sfcprop % hice(iCol)  = 0.0_RKIND !no input in ICs; probably from a climatological sea ice dataset?
-        physics_sfcprop % fice(iCol)   = xice(iCol) !potentially need to divide by a sea area fraction if necessary?
-        physics_sfcprop % tisfc(iCol)  = skintemp(iCol)
-        !physics_sfcprop % tprcp(iCol) =
-        physics_sfcprop % srflag(iCol) = 0.0_RKIND
-        physics_sfcprop % shdmin(iCol) = shdmin(iCol)
-        physics_sfcprop % shdmax(iCol) = shdmax(iCol)
-        !physics_sfcprop % slope(iCol) = ? supposed to be read in from GENPARM.TBL? need to call RUCLSM_SOILVEGPARM at some point?
-        physics_sfcprop % snoalb(iCol) = snoalb(iCol)
-        if (nint (physics_sfcprop % slmsk(iCol)) == 1) then !from fv3atm_sfc_io.F90/sfc_io_apply_safeguards()
-          physics_sfcprop % scolor(iCol) = 4
-        else
-          physics_sfcprop % scolor(iCol) = 0
-        endif
-        physics_sfcprop % tsfc(iCol) = skintemp(iCol)
-        physics_sfcprop % tsfcl(iCol) = skintemp(iCol)
-        physics_sfcprop % zorlw(iCol) = znt(iCol)*100.0_RKIND
-        physics_sfcprop % zorll(iCol) = znt(iCol)*100.0_RKIND
-        physics_sfcprop % zorli(iCol) = znt(iCol)*100.0_RKIND
-        physics_sfcprop % albdirvis_lnd(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % albdirnir_lnd(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % albdifvis_lnd(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % albdifnir_lnd(iCol) = sfc_albedo(iCol)
-        physics_sfcprop % emis_lnd(iCol) = sfc_emiss(iCol)
-        physics_sfcprop % emis_ice(iCol) = sfc_emiss(iCol)
+        surface % tsfco(iCol)           = sst(iCol)
+        surface % tg3(iCol)             = tmn(iCol)
+        surface % zorl(iCol)            = znt(iCol)*100.0_RKIND
+        surface % alvsf(iCol)           = albbck(iCol)
+        surface % alvwf(iCol)           = albbck(iCol)
+        surface % alnsf(iCol)           = albbck(iCol)
+        surface % alnwf(iCol)           = albbck(iCol)
+        surface % facsf(iCol)           = 0.5!? - from gcycle?
+        surface % facwf(iCol)           = 0.5!? - from gcycle?
+        surface % vfrac(iCol)           = vegfra(iCol)*0.01_RKIND !conversion to decimal from percent
+        surface % canopy(iCol)          = canwat(iCol)
+        surface % vtype(iCol)           = ivgtyp(iCol)
+        surface % stype(iCol)           = isltyp(iCol)
+        surface % vegtype_frac(iCol,:)  = landusef(:,iCol)
+        surface % soiltype_frac(iCol,:) = soilf(:,iCol)
+        surface % fice(iCol)            = xice(iCol) 
+        surface % tisfc(iCol)           = skintemp(iCol)
+        surface % srflag(iCol)          = 0.0_RKIND
+        surface % shdmin(iCol)          = shdmin(iCol) * 0.01_RKIND   ! percent -> fraction
+        surface % shdmax(iCol)          = shdmax(iCol) * 0.01_RKIND   ! percent -> fraction
+        surface % tsfc(iCol)            = skintemp(iCol)
+        surface % tsfcl(iCol)           = skintemp(iCol)
+        surface % zorlw(iCol)           = znt(iCol)*100.0_RKIND
+        surface % zorll(iCol)           = znt(iCol)*100.0_RKIND
+        surface % zorli(iCol)           = znt(iCol)*100.0_RKIND
+        surface % albdirvis_lnd(iCol)   = sfc_albedo(iCol)
+        surface % albdirnir_lnd(iCol)   = sfc_albedo(iCol)
+        surface % albdifvis_lnd(iCol)   = sfc_albedo(iCol)
+        surface % albdifnir_lnd(iCol)   = sfc_albedo(iCol)
+        surface % emis_lnd(iCol)        = sfc_emiss(iCol)
+        surface % emis_ice(iCol)        = sfc_emiss(iCol)
+        surface % weasd(iCol)           = snow(iCol)                  ! SWE   [kg m-2 = mm]
+        surface % snowd(iCol)           = snowh(iCol) * 1000._RKIND   ! depth [m -> mm]
+        surface % weasdl(iCol)          = snow(iCol)                  ! land SWE   [mm]
+        surface % snodl(iCol)           = snowh(iCol) * 1000._RKIND   ! land depth [mm]
+        surface % weasdi(iCol)          = snow(iCol)                  ! ice SWE    [mm]
+        surface % snodi(iCol)           = snowh(iCol) * 1000._RKIND   ! ice depth  [mm]
+        surface % sncovr(iCol)          = snowc(iCol)
+        surface % sncovr_ice(iCol)      = snowc(iCol)
+        !surface % slope(iCol)           = Not needed for RUC, internal to scheme.
 
-        physics_sfcprop % weasd(iCol)  = snow(iCol)                  ! SWE   [kg m-2 = mm]
-        physics_sfcprop % snowd(iCol)  = snowh(iCol) * 1000._RKIND   ! depth [m -> mm]
-        physics_sfcprop % weasdl(iCol) = snow(iCol)                  ! land SWE   [mm]
-        physics_sfcprop % snodl(iCol)  = snowh(iCol) * 1000._RKIND   ! land depth [mm]
-        physics_sfcprop % weasdi(iCol) = snow(iCol)                  ! ice SWE    [mm]
-        physics_sfcprop % snodi(iCol)  = snowh(iCol) * 1000._RKIND   ! ice depth  [mm]
-        physics_sfcprop % sncovr(iCol)     = snowc(iCol)
-        physics_sfcprop % sncovr_ice(iCol) = snowc(iCol)
-        
-        ! sh2o/smois/tslb (GFS_typedefs.F90) are only allocated for RUC
-        ! (Model%lsm == Model%lsm_ruc); for Noah/Noah-MP they stay null pointers, so
-        ! writing them unconditionally segfaults under lsm=1/2.
+        ! Land/sea masking.
+        if (landmask(iCol) == 1) then
+           surface % slmsk(iCol) = 1.0_RKIND
+           surface % landfrac(iCol) = 1.0_RKIND
+        else
+           surface % oceanfrac(iCol) = 1.0_RKIND
+           if (seaice(iCol) > 0.0_RKIND) then
+              surface % slmsk(iCol) = 2.0_RKIND
+           end if
+        endif
+
+        ! Soild colots (depends on land/sea masking)
+        if (nint (surface % slmsk(iCol)) == 1) then
+          surface % scolor(iCol) = 4
+        else
+          surface % scolor(iCol) = 0
+        endif
+
+        ! RUC specific fields (allocated wlen lsm=lsm_ruc)
         if (physics_control % lsm == physics_control % lsm_ruc) then
           do iLev=1, nSoilLevels
-            physics_sfcprop % sh2o(iCol, iLev) = sh2o(iLev, iCol)
-            physics_sfcprop % smois(iCol, iLev) = smois(iLev, iCol)
-            physics_sfcprop % tslb(iCol, iLev) = tslb(iLev, iCol)
+            surface % sh2o(iCol, iLev)  = sh2o(iLev, iCol)
+            surface % smois(iCol, iLev) = smois(iLev, iCol)
+            surface % tslb(iCol, iLev)  = tslb(iLev, iCol)
           end do
         end if
         ! smc/stc are allocated for every LSM, but only with Model%lsoil levels
@@ -1045,19 +950,9 @@ contains
         ! discretization (9 here, a RUC-style IC) and can exceed Model%lsoil, so
         ! cap the loop or this overruns the smc/stc arrays.
         do iLev=1, min(nSoilLevels, physics_control % lsoil)
-          physics_sfcprop % smc(iCol, iLev) = smois(iLev, iCol)
-          physics_sfcprop % stc(iCol, iLev) = tslb(iLev, iCol)
-          !need to define stc, smc, slc instead becasue CCPP version of RUC LSM expects that? set lsoil = lsoil_lsm = 9?
+          surface % smc(iCol, iLev) = smois(iLev, iCol)
+          surface % stc(iCol, iLev) = tslb(iLev, iCol)
        end do
-       if (abs(latCell(iCol)*57.2958 - 55.) < 0.6 .and. abs(lonCell(iCol)*57.2958 - 260.) < 0.6) then
-          write(0,'(a,i7,2f8.2)') 'SNOWTRACE init iCol lat lon', iCol, latCell(iCol)*57.2958, lonCell(iCol)*57.2958
-          write(0,'(a,4f10.3,i4)') 'SNOWTRACE init MPAS snow snowh snowc snoalb ivgtyp', &
-               snow(iCol), snowh(iCol), snowc(iCol), snoalb(iCol), ivgtyp(iCol)
-          write(0,'(a,8f10.3)')    'SNOWTRACE init UFS  weasdl snodl sncovr slmsk alvsf tsfcl tprcp sr', &
-               physics_sfcprop%weasdl(iCol), physics_sfcprop%snodl(iCol), physics_sfcprop%sncovr(iCol), &
-               physics_sfcprop%slmsk(iCol), physics_sfcprop%alvsf(iCol), physics_sfcprop%tsfcl(iCol), &
-               physics_sfcprop%tprcp(iCol), physics_sfcprop%srflag(iCol)
-       end if
       end do
     end do
 
@@ -1079,62 +974,58 @@ contains
   !> sfc_albedo/sfc_emiss in driver_lsm and RRTMG reads them on the following call).
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_sfc_rad_update(physics_sfcprop, physics_control)
+  subroutine ufs_mpas_sfc_rad_update(surface, physics_control)
     use GFS_typedefs,       only : GFS_sfcprop_type, GFS_control_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, &
                                    mpas_pool_get_dimension, mpas_pool_get_config
  
-    type(GFS_sfcprop_type), intent(in) :: physics_sfcprop
+    type(GFS_sfcprop_type), intent(in) :: surface
     type(GFS_control_type), intent(in) :: physics_control
  
-    type(mpas_pool_type), pointer :: diag_phys,mesh
+    type(mpas_pool_type), pointer :: diag_phys
     integer,  pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     logical,  pointer :: config_frac_seaice
-    real(RKIND), pointer :: sfc_albedo(:), sfc_emiss(:),lonCell(:),latCell(:)
+    real(RKIND), pointer :: sfc_albedo(:), sfc_emiss(:)
     real(RKIND) :: fi
     integer :: iCol, ithread
     real(RKIND), parameter :: alb_wat = 0.08_RKIND, ems_wat = 0.98_RKIND   ! MPAS open-water values
  
     ! Only meaningful when RUC provides the land/ice albedo and emissivity.
     if (physics_control%lsm /= physics_control%lsm_ruc) return
- 
+
+    ! Get dimension
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'nThreads',             nThreads)
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'cellSolveThreadStart', cellSolveThreadStart)
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'cellSolveThreadEnd',   cellSolveThreadEnd)
+
+    ! MPAS configuration
     call mpas_pool_get_config(domain_ptr % blocklist % configs, 'config_frac_seaice', config_frac_seaice)
+
+    ! Access MPAS data pools.
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag_physics', diag_phys)
-     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh', mesh)
+
+    ! Grab fields from MPAS pools  
     call mpas_pool_get_array(diag_phys, 'sfc_albedo', sfc_albedo)
     call mpas_pool_get_array(diag_phys, 'sfc_emiss',  sfc_emiss)
-    call mpas_pool_get_array(mesh,  'latCell',     latCell)
-    call mpas_pool_get_array(mesh,  'lonCell',     lonCell)
+    
     do ithread = 1, nThreads
        do iCol = cellSolveThreadStart(ithread), cellSolveThreadEnd(ithread)
-          select case (nint(physics_sfcprop%slmsk(iCol)))
+          select case (nint(surface%slmsk(iCol)))
           case (1)                                   ! land: RUC albedo/emissivity incl. snow
-             sfc_albedo(iCol) = physics_sfcprop%sfalb_lnd(iCol)
-             sfc_emiss(iCol)  = physics_sfcprop%emis_lnd(iCol)
+             sfc_albedo(iCol) = surface % sfalb_lnd(iCol)
+             sfc_emiss(iCol)  = surface % emis_lnd(iCol)
           case (2)                                   ! sea ice: RUC ice albedo/emissivity incl. snow on ice
              if (config_frac_seaice) then
-                fi = min(1._RKIND, max(0._RKIND, real(physics_sfcprop%fice(iCol), RKIND)))
-                sfc_albedo(iCol) = fi*physics_sfcprop%sfalb_ice(iCol) + (1._RKIND-fi)*alb_wat
-                sfc_emiss(iCol)  = fi*physics_sfcprop%emis_ice(iCol)  + (1._RKIND-fi)*ems_wat
+                fi = min(1._RKIND, max(0._RKIND, real(surface % fice(iCol), RKIND)))
+                sfc_albedo(iCol) = fi*surface % sfalb_ice(iCol) + (1._RKIND-fi)*alb_wat
+                sfc_emiss(iCol)  = fi*surface % emis_ice(iCol)  + (1._RKIND-fi)*ems_wat
              else
-                sfc_albedo(iCol) = physics_sfcprop%sfalb_ice(iCol)
-                sfc_emiss(iCol)  = physics_sfcprop%emis_ice(iCol)
+                sfc_albedo(iCol) = surface % sfalb_ice(iCol)
+                sfc_emiss(iCol)  = surface % emis_ice(iCol)
              end if
           case default                               ! open water: keep MPAS values (0.08 / 0.98)
           end select
-          if (abs(latCell(iCol)*57.2958 - 55.) < 0.6 .and. abs(lonCell(iCol)*57.2958 - 260.) < 0.6 &
-              .and. ( physics_control%kdt <= 5  .or. mod(physics_control%kdt,5) == 0)) then
-             write(0,'(a,i4,11f10.4)') 'SNOWTRACE kdt weasdl snodl sncovr snoalb bck sfalb_lnd emis_lnd tsfcl sfc_albedo tprcp sr', &
-                  physics_control%kdt, physics_sfcprop%weasdl(iCol), physics_sfcprop%snodl(iCol), &
-                  physics_sfcprop%sncovr(iCol), physics_sfcprop%snoalb(iCol), physics_sfcprop%sfalb_lnd_bck(iCol), &
-                  physics_sfcprop%sfalb_lnd(iCol), physics_sfcprop%emis_lnd(iCol), physics_sfcprop%tsfcl(iCol), &
-                  sfc_albedo(iCol),physics_sfcprop%tprcp(iCol), physics_sfcprop%srflag(iCol)
-          end if
-
        end do
     end do
  
@@ -1396,10 +1287,10 @@ contains
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',         mesh)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input',    sfc_input)
 
-    ! Dimensions
+    ! Get dimensions
     call mpas_pool_get_dimension(mesh,'nCells',nCells)
 
-    ! Arrays
+    ! Access MPAS data pool
     call mpas_pool_get_array(mesh,     'latCell'   ,latCell    )
     call mpas_pool_get_array(sfc_input,'isice_lu'  ,isice      )
     call mpas_pool_get_array(sfc_input,'iswater_lu',iswater    )
@@ -1506,7 +1397,7 @@ contains
     call mpas_pool_get_dimension(mesh,'nCellsSolve',nCellsSolve)
     call mpas_pool_get_dimension(mesh,'nEdges',nEdges)
 
-    ! Grad arrays
+    ! Grab arrays
     call mpas_pool_get_array(mesh,'east',east)
     call mpas_pool_get_array(mesh,'north',north)
     call mpas_pool_get_array(mesh,'edgeNormalVectors',edgeNormalVectors)
@@ -1534,7 +1425,7 @@ contains
   !> Procedure to compute hydrostatic pressure for the physics from the MPAS state.
   !>
   !> ########################################################################################
-  subroutine ufs_mpas_hydrostatic_pressure(physics_state, qv, when)
+  subroutine ufs_mpas_hydrostatic_pressure(statein, qv, when)
     use mpas_log,             only : mpas_log_write
     use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
     use mpas_derived_types,   only : mpas_pool_type
@@ -1542,7 +1433,7 @@ contains
     use GFS_typedefs,         only : GFS_statein_type
     use mpas_constants,       only : gravity
 
-    type(GFS_statein_type), intent(inout) :: physics_state
+    type(GFS_statein_type), intent(inout) :: statein
     real(kind=RKIND), intent(in) :: qv(:,:)
     character(len=*), intent(in) :: when
     !
@@ -1562,6 +1453,7 @@ contains
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadStart', cellSolveThreadStart)
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions,  'cellSolveThreadEnd',   cellSolveThreadEnd)
 
+    ! Access MPAS data pool
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'diag',  diag_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', state_pool)
@@ -1570,6 +1462,7 @@ contains
     call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
     call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
 
+    ! Grab fields from MPAS pools
     call mpas_pool_get_array(diag_pool,  'exner',         exner)
     call mpas_pool_get_array(diag_pool,  'pressure_base', pressure_b)
     call mpas_pool_get_array(diag_pool,  'pressure_p',    pressure_p)
@@ -1598,7 +1491,7 @@ contains
              tem1 = 1./(zgrid(iLay+1,iCol)-zgrid(iLay-1,iCol))
              fzm_p = (zgrid(iLay,  iCol)-zgrid(iLay-1,iCol)) * tem1
              fzp_p = (zgrid(iLay+1,iCol)-zgrid(iLay,  iCol)) * tem1
-             physics_state % tgri(iCol,iLay) = fzm_p*physics_state % tgrs(iCol,iLay) + fzp_p*physics_state % tgrs(iCol,iLay-1)
+             statein % tgri(iCol,iLay) = fzm_p*statein % tgrs(iCol,iLay) + fzp_p*statein % tgrs(iCol,iLay-1)
              prsi(iCol,iLay) = fzm_p*prsl(iCol,iLay) + fzp_p*prsl(iCol,iLay-1)
           enddo
        enddo
@@ -1613,7 +1506,7 @@ contains
           z2 = 0.5*(zgrid(iLay-1,iCol)+zgrid(iLay-2,iCol))
           w1 = (z0-z2)/(z1-z2)
           w2 = 1.-w1
-          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay-1) + w2*physics_state % tgrs(iCol,iLay-2)
+          statein % tgri(iCol,iLay) = w1*statein % tgrs(iCol,iLay-1) + w2*statein % tgrs(iCol,iLay-2)
           prsi(iCol,iLay) = exp(w1*log(prsl(iCol,iLay-1))+w2*log(prsl(iCol,iLay-2)))
        end do
     end do
@@ -1628,7 +1521,7 @@ contains
           z2 = 0.5*(zgrid(iLay+1,iCol)+zgrid(iLay+2,iCol))
           w1 = (z0-z2)/(z1-z2)
           w2 = 1.-w1
-          physics_state % tgri(iCol,iLay) = w1*physics_state % tgrs(iCol,iLay) + w2*physics_state % tgrs(iCol,iLay+1)
+          statein % tgri(iCol,iLay) = w1*statein % tgrs(iCol,iLay) + w2*statein % tgrs(iCol,iLay+1)
           prsi(iCol,iLay) = w1*prsl(iCol,iLay)+w2*prsl(iCol,iLay+1)
        end do
     end do
@@ -1638,32 +1531,30 @@ contains
        do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
           ! Pressure at layer-interfaces
           iLay = nVertLevels + 1
-          physics_state % prsi(iCol,iLay) = prsi(iCol,iLay)
+          statein % prsi(iCol,iLay) = prsi(iCol,iLay)
           do iLay = nVertLevels,1,-1
              rho_moist = rho(iCol,iLay) * (1.+qv(iLay,iCol)) ! Moist-density
-             physics_state % prsi(iCol,iLay)  = physics_state % prsi(iCol,iLay+1) + &
-                  gravity*rho_moist*physics_state % dzgrid(iCol,iLay)
+             statein % prsi(iCol,iLay)  = statein % prsi(iCol,iLay+1) + &
+                  gravity*rho_moist*statein % dzgrid(iCol,iLay)
           end do
           ! Pressure at layer-centers
           do iLay = nVertLevels,1,-1
-             physics_state % prsl(iCol,iLay) = 0.5*(physics_state % prsi(iCol,iLay+1) + physics_state % prsi(iCol,iLay) )
+             statein % prsl(iCol,iLay) = 0.5*(statein % prsi(iCol,iLay+1) + statein % prsi(iCol,iLay) )
           end do
           ! Pressure layer thickness
           do iLay = 1,nVertLevels
-             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
+             statein % dp(iCol,iLay) = statein % prsi(iCol,iLay) - statein % prsi(iCol,iLay+1)
           end do
           ! Pressure difference across layer-centers
-          physics_state % dp(iCol,1) = physics_state % prsi(iCol,1) - physics_state % prsi(iCol,2)
+          statein % dp(iCol,1) = statein % prsi(iCol,1) - statein % prsi(iCol,2)
           do iLay = 2,nVertLevels
-             physics_state % dp(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
-!             physics_state % dpc(iCol,iLay)  = physics_state % prsl(iCol,iLay-1) - physics_state % prsl(iCol,iLay)
+             statein % dp(iCol,iLay) = statein % prsi(iCol,iLay) - statein % prsi(iCol,iLay+1)
           end do
-          !          physics_state % dpc(iCol,1)  = physics_state % prsi(iCol,1) - physics_state % prsl(iCol,1)
           do iLay = 1, nVertLevels
-             physics_state % dpc(iCol,iLay) = physics_state % prsi(iCol,iLay) - physics_state % prsi(iCol,iLay+1)
+             statein % dpc(iCol,iLay) = statein % prsi(iCol,iLay) - statein % prsi(iCol,iLay+1)
           end do
           ! Surface pressure
-          physics_state % pgr(iCol) = physics_state % prsi(iCol,1)
+          statein % pgr(iCol) = statein % prsi(iCol,1)
        end do
     end do
 
@@ -1734,15 +1625,15 @@ contains
        if(landmask(iCell) .eq. 0) sfc_albbck(iCell) = 0.08
     enddo
 
-    surface%alvsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
-    surface%alvwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
-    surface%alnsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
-    surface%alnwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface % alvsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface % alvwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface % alnsf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
+    surface % alnwf(1:nCellsSolve) = sfc_albbck(1:nCellsSolve)
     ! RUC only turns alvsf/alnsf/... into sfalb_lnd_bck inside lsm_ruc_init;
     ! lsm_ruc_run takes sfalb_lnd_bck as intent(in). Updating alvsf daily has
     ! no effect. Update the RUC background directly (land points only):
     do iCell = 1, nCellsSolve
-       if (landmask(iCell) == 1) surface%sfalb_lnd_bck(iCell) = sfc_albbck(iCell)
+       if (landmask(iCell) == 1) surface % sfalb_lnd_bck(iCell) = sfc_albbck(iCell)
     enddo
     !
     call mpas_log_write(subname //'   Finished updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
@@ -1786,11 +1677,16 @@ contains
        return
     end if
 
+    ! Access MPAS data pools
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', state_pool)
-    call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
     call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',  mesh_pool)
-    call mpas_pool_get_dimension(mesh_pool, 'nCellsSolve', nCellsSolve)
-    call mpas_pool_get_dimension(mesh_pool, 'nVertLevels', nVertLevels)
+
+    ! Get dimensions
+    call mpas_pool_get_dimension(state_pool, 'num_scalars', num_scalars)
+    call mpas_pool_get_dimension(mesh_pool,  'nCellsSolve', nCellsSolve)
+    call mpas_pool_get_dimension(mesh_pool,  'nVertLevels', nVertLevels)
+
+    ! Grab fields from MPAS pools
     call mpas_pool_get_array(state_pool, 'scalars', scalars, timeLevel=1)
 
     ! MPAS scalar index that holds the UFS ozone tracer
@@ -1863,11 +1759,11 @@ contains
    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'mesh',         mesh)
    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'sfc_input',    sfc_input)
 
-   ! Dimensions
+   ! Get dimensions
    call mpas_pool_get_dimension(mesh,'nCells',nCells)
    call mpas_pool_get_config( domain_ptr % blocklist % configs, 'config_frac_seaice', config_frac_seaice)
 
-   ! Arrays
+   ! Grab fields from MPAS pools
    call mpas_pool_get_array(sfc_input,'sfc_albedo', sfc_albedo)
    call mpas_pool_get_array(sfc_input,'sfc_emiss',  sfc_emiss)
    call mpas_pool_get_array(diag_phys,'xicem',      xicem)

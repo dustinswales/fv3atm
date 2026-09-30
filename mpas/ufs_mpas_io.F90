@@ -942,7 +942,7 @@ contains
           zol(iCol)    = surface%zol(iCol)
           mol(iCol)    = surface%mol(iCol)
           rmol(iCol)   = surface%rmol(iCol)
-          lh(iCol)     = surface%lh(iCol)
+          lh(iCol)     = 2.5e6_RKIND * qfx(iCol)
           ! MYNN (PBL)
           if (control % do_mynnedmf) then
              sh3d(:,iCol)       = tbd%sh3d(iCol,:)
