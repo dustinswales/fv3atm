@@ -394,8 +394,8 @@ contains
 
     ! Local variables
     character(len=*), parameter :: subname = 'ufs_mpas_subdriver::ufs_mpas_define_lbc_scalars'
-    type (mpas_pool_type), pointer :: lbcPool
-    integer, pointer :: num_scalars
+    type (mpas_pool_type), pointer :: lbcPool, statePool
+    integer, pointer :: num_scalars, moist_end_ptr
     integer :: i, j, timeLevs, num_moist
     type (field3dReal), pointer :: scalarsField
 
@@ -448,10 +448,10 @@ contains
 
     end do
 
-    ! Define lbc_scalars_tend
-    ! DJS: No need to do this for LBCs. Tendency/State for LBC stored in LBC pool created
-    !      in ufs_mpas_update_bdy_tend()
-
+    !
+    call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'state', statePool)
+    call mpas_pool_get_dimension(statePool, 'moist_end', moist_end_ptr)
+    num_moist = moist_end_ptr
     call mpas_pool_add_dimension(lbcPool, 'moist_start', 1)
     call mpas_pool_add_dimension(lbcPool, 'moist_end', num_moist)
 
