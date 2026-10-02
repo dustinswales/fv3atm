@@ -50,6 +50,7 @@ contains
     use mpas_pool_routines,  only : mpas_pool_shift_time_levels, mpas_pool_get_array
     use mpas_pool_routines,  only : mpas_pool_get_dimension
     use module_mpas_config,  only : pioid_lbc
+    use pio, only : pio_inq_dimid, pio_inq_dimlen, pio_noerr
 
     implicit none
 
@@ -103,6 +104,7 @@ contains
     character(len=StrKIND) :: read_time
     integer :: iEdge, iCell, k, j
     integer :: cell1, cell2
+    integer :: dimid, nRecFile, pio_ierr
 
 
     ierr = 0
@@ -111,6 +113,18 @@ contains
     call mpas_pool_get_subpool(block % structs, 'state', state)
     call mpas_pool_get_subpool(block % structs, 'lbc', lbc)
 
+    ! Check if forecast out ran the LBC forcing window.
+    ! If so, exit model with error.
+    pio_ierr = pio_inq_dimid(pioid_lbc, 'Time', dimid)
+    if (pio_ierr == pio_noerr) pio_ierr = pio_inq_dimlen(pioid_lbc, dimid, nRecFile)
+    if (pio_ierr /= pio_noerr) then
+       call mpas_log_write('Could not determine the number of records in the LBC file', messageType=MPAS_LOG_CRIT)
+    else if (nRecord > nRecFile) then
+       call mpas_log_write('LBC file has $i records but record $i is needed: '// &
+            'the forecast runs past the end of the LBC data', intArgs=[nRecFile, nRecord], messageType=MPAS_LOG_CRIT)
+    end if
+
+    read_time = 'UNSET'
     if (firstCall) then
        call dyn_mpas_read_write_stream(clock, 'r', 'lbc_in', pio_file_desc=pioid_lbc, ierr=ierr, timeLevel=2, &
             whence = MPAS_STREAM_LATEST_BEFORE, actualWhen=read_time, nRecord=nRecord, debug=debug)
@@ -133,6 +147,10 @@ contains
        return
     end if
 
+    do j = 1, len(read_time)
+       if (iachar(read_time(j:j)) < 32) read_time(j:j) = ' '
+    end do
+    call mpas_log_write('LBC record time read from file: "'//trim(read_time)//'"')
     call mpas_set_time(currTime, dateTimeString=trim(read_time))
     
     !

@@ -59,6 +59,7 @@ module ufs_mpas_io
   !> It consists of variables that are members of the "lbc" structure.
   !> #########################################################################################
   type(var_info_type), parameter :: lbc_in_var_info_list(*) = [ &
+       var_info_type('xtime'                           , 'character' , 0), &
        var_info_type('lbc_u'                           , 'real'      , 2), &
        var_info_type('lbc_w'                           , 'real'      , 2), &
        var_info_type('lbc_rho'                         , 'real'      , 2), &
@@ -450,7 +451,7 @@ contains
   !>
   !> #########################################################################################
   subroutine ufs_mpas_open_lbc(ierr)
-    use pio, only : pio_openfile, pio_nowrite
+    use pio, only : pio_openfile, pio_nowrite, pio_seterrorhandling, PIO_BCAST_ERROR
     integer, intent(out) :: ierr
     logical :: file_exists
 
@@ -459,6 +460,7 @@ contains
     INQUIRE(FILE=lbc_filename, EXIST=file_exists)
     if (file_exists) then
        ierr = pio_openfile(pio_subsystem_lbc, pioid_lbc, pio_iotype, lbc_filename, pio_nowrite)
+       if (ierr == 0) call pio_seterrorhandling(pioid_lbc, PIO_BCAST_ERROR)
     else
        ierr = -1
     end if
@@ -1406,7 +1408,7 @@ contains
  !> \update: Dustin Swales April 2025 - Modified for use in UWM
  !>
  !> ########################################################################################
- subroutine dyn_mpas_exchange_halo(field_name, debug)
+ subroutine dyn_mpas_exchange_halo(field_name, debug, timeLevel)
    ! Module(s) from MPAS.
    use mpas_derived_types, only : field1dinteger, field2dinteger, field3dinteger,           &
                                   field1dreal, field2dreal, field3dreal, field4dreal,       &
@@ -1414,10 +1416,12 @@ contains
                                   mpas_pool_real
    use mpas_dmpar,         only : mpas_dmpar_exch_halo_field
    use mpas_pool_routines, only : mpas_pool_get_field, mpas_pool_get_field_info
-   character(*), intent(in) :: field_name
-   logical, intent(in)      :: debug
-
-   character(*), parameter :: subname = 'dyn_mpas_io::dyn_mpas_exchange_halo'
+   ! Arguments
+   character(*), intent(in)           :: field_name
+   logical,      intent(in)           :: debug
+   integer,      intent(in), optional :: timeLevel
+   ! Locals
+   integer :: tl
    type(field1dinteger), pointer :: field_1d_integer
    type(field2dinteger), pointer :: field_2d_integer
    type(field3dinteger), pointer :: field_3d_integer
@@ -1427,8 +1431,12 @@ contains
    type(field4dreal), pointer :: field_4d_real
    type(field5dreal), pointer :: field_5d_real
    type(mpas_pool_field_info_type) :: mpas_pool_field_info
+   character(*), parameter :: subname = 'dyn_mpas_io::dyn_mpas_exchange_halo'
 
    if (debug) call mpas_log_write(subname // ' entered')
+
+   tl = 1
+   if (present(timeLevel)) tl = timeLevel
 
    nullify(field_1d_integer)
    nullify(field_2d_integer)
@@ -1463,7 +1471,7 @@ contains
       select case (mpas_pool_field_info % ndims)
       case (1)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_1d_integer, timelevel=1)
+              trim(adjustl(field_name)), field_1d_integer, timelevel=tl)
 
          if (.not. associated(field_1d_integer)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1474,7 +1482,7 @@ contains
          nullify(field_1d_integer)
       case (2)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_2d_integer, timelevel=1)
+              trim(adjustl(field_name)), field_2d_integer, timelevel=tl)
 
          if (.not. associated(field_2d_integer)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1485,7 +1493,7 @@ contains
          nullify(field_2d_integer)
       case (3)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_3d_integer, timelevel=1)
+              trim(adjustl(field_name)), field_3d_integer, timelevel=tl)
 
          if (.not. associated(field_3d_integer)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1501,7 +1509,7 @@ contains
       select case (mpas_pool_field_info % ndims)
       case (1)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_1d_real, timelevel=1)
+              trim(adjustl(field_name)), field_1d_real, timelevel=tl)
 
          if (.not. associated(field_1d_real)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1512,7 +1520,7 @@ contains
          nullify(field_1d_real)
       case (2)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_2d_real, timelevel=1)
+              trim(adjustl(field_name)), field_2d_real, timelevel=tl)
 
          if (.not. associated(field_2d_real)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1521,7 +1529,7 @@ contains
          nullify(field_2d_real)
       case (3)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_3d_real, timelevel=1)
+              trim(adjustl(field_name)), field_3d_real, timelevel=tl)
 
          if (.not. associated(field_3d_real)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1532,7 +1540,7 @@ contains
          nullify(field_3d_real)
       case (4)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_4d_real, timelevel=1)
+              trim(adjustl(field_name)), field_4d_real, timelevel=tl)
 
          if (.not. associated(field_4d_real)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1543,7 +1551,7 @@ contains
          nullify(field_4d_real)
       case (5)
          call mpas_pool_get_field(domain_ptr % blocklist % allfields, &
-              trim(adjustl(field_name)), field_5d_real, timelevel=1)
+              trim(adjustl(field_name)), field_5d_real, timelevel=tl)
 
          if (.not. associated(field_5d_real)) then
             call mpas_log_write(subname // ' Failed to find field "' // trim(adjustl(field_name)) // '"', messageType=MPAS_LOG_CRIT)
@@ -1638,7 +1646,7 @@ contains
       var_info_list = parse_stream_name(stream_name)
 
       do i = 1, size(var_info_list)
-         call dyn_mpas_exchange_halo(var_info_list(i) % name, debug)
+         call dyn_mpas_exchange_halo(var_info_list(i) % name, debug, timeLevel=timeLevel)
          if ( ierr /= 0 ) then
             call mpas_log_write(subname // ' Failed to exchange halo layers for group '//var_info_list(i) % name, messageType=MPAS_LOG_CRIT)
          end if
@@ -1705,6 +1713,7 @@ contains
    call MPAS_readStream(stream, nRecord, ierr=ierr)
    if (present(actualWhen)) then
       call MPAS_streamTime(stream, nRecord, actualWhen, ierr=ierr)
+      call mpas_log_write('MPAS_streamTime ierr = $i, nRecord = $i', intArgs=[ierr, nRecord])
    endif
    
  end subroutine read_stream

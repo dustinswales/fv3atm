@@ -804,6 +804,7 @@ contains
     integer                 :: mpas_number_rayleigh_damp_u_levels  = 6
     ! Namelist limited_area
     logical                 :: mpas_apply_lbcs                     = .false.
+    character (len=StrKIND) :: mpas_lbc_w                          = "zero"
     ! Namelist PIO
     integer                 :: mpas_pio_num_iotasks                = 1
     integer                 :: mpas_pio_stride                     = 1
@@ -838,7 +839,7 @@ contains
          mpas_rayleigh_damp_u, mpas_rayleigh_damp_u_timescale_days,                           &
          mpas_number_rayleigh_damp_u_levels
     !
-    namelist /mpas_limited_area/  mpas_apply_lbcs
+    namelist /mpas_limited_area/  mpas_apply_lbcs, mpas_lbc_w
     !
     namelist /mpas_io/ mpas_pio_num_iotasks, mpas_pio_stride
     !
@@ -953,6 +954,7 @@ contains
     call mpi_bcast(mpas_number_rayleigh_damp_u_levels,  1, mpi_integer,   master, mpicomm, mpierr)
     !
     call mpi_bcast(mpas_apply_lbcs,                     1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_lbc_w,                    StrKIND, mpi_character, master, mpicomm, mpierr)
     !
     call mpi_bcast(mpas_pio_num_iotasks,                1, mpi_integer,   master, mpicomm, mpierr)
     call mpi_bcast(mpas_pio_stride,                     1, mpi_integer,   master, mpicomm, mpierr)
@@ -1019,6 +1021,7 @@ contains
     call mpas_pool_add_config(configPool, 'config_number_rayleigh_damp_u_levels',  mpas_number_rayleigh_damp_u_levels)
     !
     call mpas_pool_add_config(configPool, 'config_apply_lbcs',                     mpas_apply_lbcs)
+    call mpas_pool_add_config(configPool, 'config_lbc_w',                          mpas_lbc_w)
     !
     call mpas_pool_add_config(configPool, 'config_pio_num_iotasks',                mpas_pio_num_iotasks)
     call mpas_pool_add_config(configPool, 'config_pio_stride',                     mpas_pio_stride)
@@ -1089,6 +1092,7 @@ contains
        call mpas_log_write('   mpas_rayleigh_damp_u_timescale_days = '//int2str(int(mpas_rayleigh_damp_u_timescale_days)))
        call mpas_log_write('   mpas_number_rayleigh_damp_u_levels  = '//int2str(mpas_number_rayleigh_damp_u_levels))
        call mpas_log_write('   mpas_apply_lbcs                     = '//log2str(mpas_apply_lbcs))
+       call mpas_log_write('   mpas_lbc_w                          = '//trim(mpas_lbc_w))
        call mpas_log_write('   mpas_pio_num_iotasks                = '//int2str(mpas_pio_num_iotasks))
        call mpas_log_write('   mpas_pio_stride                     = '//int2str(mpas_pio_stride))
        call mpas_log_write('   mpas_jedi_da                        = '//log2str(mpas_jedi_da))
