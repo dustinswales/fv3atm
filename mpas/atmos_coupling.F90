@@ -463,6 +463,7 @@ contains
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array
     use mpas_pool_routines, only : mpas_pool_get_dimension, mpas_pool_get_config
     use mpas_constants,     only : gravity, rvord, rv, rgas, p0, cp
+    use mpas_atm_boundaries, only : nRelaxZone
 
     ! Arguments
     type(GFS_stateout_type), intent(in) :: stateout
@@ -473,7 +474,7 @@ contains
     integer :: iCol, ithread, iLay, iTracer
     integer, pointer :: nCellsSolve
     integer, pointer :: index_qv => null()
-    integer, pointer :: num_scalars, nVertLevels
+    integer, pointer :: num_scalars, nVertLevels, bdyMaskCell(:)
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     real(kind=RKIND) :: rho1, rho2, tem1, tem2, coeff, rcv, theta_dyn, qv_old
     real(kind=RKIND), pointer :: config_dt
@@ -516,6 +517,7 @@ contains
     call mpas_pool_get_array(state_pool, 'theta_m',          theta_m, timeLevel=1)
     call mpas_pool_get_array(mesh_pool,  'zgrid',            zgrid)
     call mpas_pool_get_array(mesh_pool,  'zz',               zz)
+    call mpas_pool_get_array(mesh_pool,  'bdyMaskCell',      bdyMaskCell)
     call mpas_pool_get_array(diag_pool,  'pressure_base',    pressure_b)
     call mpas_pool_get_array(diag_pool,  'pressure_p',       pressure_p)
     call mpas_pool_get_array(diag_pool,  'surface_pressure', surface_pressure)
@@ -533,7 +535,15 @@ contains
     allocate(theta(nVertLevels, nCellsSolve))
     rcv = rgas/(cp-rgas)
     do ithread=1,nThreads
-      do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+       do iCol=cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+        ! Limited-area: cells in the specified zone are set from the LBC data by the dycore.
+         ! Leave them untouched by microphysics
+         !(standalone MPAS resets them after microphysics, from the dycore.).
+        if (bdyMaskCell(iCol) > nRelaxZone) then
+           rt_diabatic_tend(:,iCol) = 0._RKIND
+           dtheta_dt_mp(:,iCol)     = 0._RKIND
+           cycle
+        end if
         do iLay = 1,nVertLevels
 
           ! Initialize diabatic heating tendency (initially fill with theta_m before updating)
