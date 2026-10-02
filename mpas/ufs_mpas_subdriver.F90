@@ -163,10 +163,17 @@ contains
     call mpas_log_write('config_run_duration = '//trim(int2str(tod))//'_'//sec2hms(total_time))
 
     ! Set other MPAS required configuration information.
-    call mpas_pool_add_config(domain_ptr % configs, 'config_restart_timestamp_name', 'restart_timestamp')
-    call mpas_pool_add_config(domain_ptr % configs, 'config_IAU_option',             'off')
-    call mpas_pool_add_config(domain_ptr % configs, 'config_do_DAcycling',           .false.)
-    call mpas_pool_add_config(domain_ptr % configs, 'config_halo_exch_method',       'mpas_halo')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_restart_timestamp_name',  'restart_timestamp')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_IAU_option',              'off')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_do_DAcycling',            .false.)
+    call mpas_pool_add_config(domain_ptr % configs, 'config_halo_exch_method',        'mpas_halo')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_gpu_aware_mpi',           .false.)
+    call mpas_pool_add_config(domain_ptr % configs, 'config_mix_scalars',             .false.)
+    call mpas_pool_add_config(domain_ptr % configs, 'config_les_model',               'none')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_les_surface',             'none')
+    call mpas_pool_add_config(domain_ptr % configs, 'config_surface_heat_flux',       0.)
+    call mpas_pool_add_config(domain_ptr % configs, 'config_surface_moisture_flux',   0.)
+    call mpas_pool_add_config(domain_ptr % configs, 'config_surface_drag_coefficient',0.)
 
     !
     ! Initialize MPAS infrastructure (phase 2)
@@ -326,6 +333,7 @@ contains
     use mpas_attlist,               only : mpas_modify_att
     use mpas_string_utils,          only : mpas_string_replace
     use mpas_field_routines,        only : mpas_allocate_scratch_field
+    use mpas_stochastic_physics,    only : stochastic_physics_pattern_init
     ! Arguments
     logical,                 intent(in   ) :: debug
     integer,                 intent(out  ) :: nlevs, dt_dycore
@@ -340,8 +348,9 @@ contains
     character(len=StrKIND) :: startTimeStamp
     character (len=StrKIND), pointer :: xtime
     character (len=StrKIND), pointer :: initial_time1, initial_time2
-    logical, pointer :: config_apply_lbcs
     type(field2dreal), pointer :: field_2d_real
+    real(RKIND), dimension(:,:,:), pointer :: field_3d_real
+    logical, pointer :: config_apply_lbcs, do_sppt
 
     !
     ! Setup threading
@@ -521,6 +530,16 @@ contains
     call mpas_allocate_scratch_field(field_2d_real)
     nullify(field_2d_real)
 
+    ! Initialize stochastic pattern generation
+    call mpas_pool_get_config(domain_ptr % blocklist % configs, 'do_sppt', do_sppt)
+    if (do_sppt) then
+       call stochastic_physics_pattern_init(domain_ptr)
+       if (ierr /= 0) then
+          call mpas_log_write('Failed stochastic_physics_pattern_init call')
+          return
+       end if
+    endif
+
     call mpas_log_write('Successful initialization of MPAS dynamical core')
 
   end subroutine ufs_mpas_atm_core_init
@@ -543,6 +562,7 @@ contains
     use mpas_timekeeping,     only : mpas_advance_clock, mpas_get_clock_time, mpas_get_time
     use mpas_timekeeping,     only : mpas_NOW, mpas_is_clock_stop_time, mpas_dmpar_get_time
     use mpas_timekeeping,     only : mpas_set_timeInterval, operator(+), operator(.LT.), operator(.GT.), operator(.LE.), operator(.EQ.)
+    use mpas_stochastic_physics, only : stochastic_physics_pattern_adv
     ! Arguments
     real(kind=R8KIND), intent(inout) :: mpasClock,outClock
     logical, intent(in   ) :: debug, phys_diag
@@ -554,7 +574,7 @@ contains
     character(len=StrKIND) :: timeStamp, timeStampOutFile
     integer :: ierr, itimestep
     real (kind=R8KIND) :: integ_start_time, integ_stop_time
-    logical, pointer :: config_apply_lbcs
+    logical, pointer :: config_apply_lbcs, do_sppt
     type(mpas_timeinterval_type) :: mpas_time_interval
     real (kind=RKIND) :: start_time, stop_time
     integer, save :: ncall_dyn = 0
@@ -638,6 +658,12 @@ contains
              end if
           end if
        end if
+
+       ! Update stochastic physics pattern
+       call mpas_pool_get_config(domain_ptr % blocklist % configs, 'do_sppt', do_sppt)
+       if (do_sppt) then
+          call stochastic_physics_pattern_adv(domain_ptr, itimestep)
+       endif
 
        ! Integrate forward one dycore time step
        call mpas_timer_start('time integration')
@@ -790,7 +816,7 @@ contains
     real(r8)                :: mpas_coef_3rd_order                 = 0.25_r8
     real(r8)                :: mpas_smagorinsky_coef               = 0.125_r8
     logical                 :: mpas_mix_full                       = .true.
-    real(r8)                :: mpas_epssm                          = 0.1_r8
+    !real(r8)                :: mpas_epssm                          = 0.1_r8
     real(r8)                :: mpas_smdiv                          = 0.1_r8
     real(r8)                :: mpas_apvm_upwinding                 = 0.5_r8
     logical                 :: mpas_h_ScaleWithMesh                = .true.
@@ -802,6 +828,10 @@ contains
     logical                 :: mpas_rayleigh_damp_u                = .false.
     real(r8)                :: mpas_rayleigh_damp_u_timescale_days = 5.0_r8
     integer                 :: mpas_number_rayleigh_damp_u_levels  = 6
+    real(r8)                :: mpas_epssm_minimum                  = 0.1
+    real(r8)                :: mpas_epssm_maximum                  = 0.5
+    real(r8)                :: mpas_epssm_transition_bottom_z      = 3000.
+    real(r8)                :: mpas_epssm_transition_top_z         = 50000.
     ! Namelist limited_area
     logical                 :: mpas_apply_lbcs                     = .false.
     character (len=StrKIND) :: mpas_lbc_w                          = "zero"
@@ -822,6 +852,29 @@ contains
     logical                 :: mpas_sfc_albedo                     = .true.
     logical                 :: mpas_frac_seaice                    = .true.
     character (len=StrKIND) :: mpas_lsm_scheme                     = 'sf_ruc'
+    logical                 :: mpas_print_global_minmax_tend_ps    = .false.
+    logical                 :: mpas_print_detailed_minmax_tend_ps  = .false.
+    ! Namelist nam_stochy
+    logical                 :: mpas_do_sppt                        = .false.
+    logical                 :: mpas_do_skeb                        = .false.
+    integer                 :: mpas_spptint                        = 0
+    real(r8)                :: mpas_sppt_1                         = 0.0
+    real(r8)                :: mpas_sppt_2                         = 0.0
+    real(r8)                :: mpas_sppt_3                         = 0.0
+    real(r8)                :: mpas_sppt_tau_1                     = 21600.
+    real(r8)                :: mpas_sppt_tau_2                     = 86400.
+    real(r8)                :: mpas_sppt_tau_3                     = 21600.
+    real(r8)                :: mpas_sppt_lscale_1                  = 500000.
+    real(r8)                :: mpas_sppt_lscale_2                  = 1000000.
+    real(r8)                :: mpas_sppt_lscale_3                  = 2000000.
+    logical                 :: mpas_sppt_logit                     = .true.
+    logical                 :: mpas_sppt_sfclimit                  = .true.
+    character (len=StrKIND) :: mpas_iseed_sppt1                    = '2026010112001'
+    character (len=StrKIND) :: mpas_iseed_sppt2                    = '0'
+    character (len=StrKIND) :: mpas_iseed_sppt3                    = '0'
+    real(r8)                :: mpas_sppt_hgt_top1                  = 15000
+    real(r8)                :: mpas_sppt_hgt_top2                  = 27000
+    logical                 :: mpas_stochini                       = .false.
 
     namelist /mpas_nhyd_model/ mpas_time_integration, mpas_time_integration_order, mpas_dt,   &
          mpas_split_dynamics_transport, mpas_number_of_sub_steps, mpas_dynamics_split_steps,  &
@@ -832,12 +885,13 @@ contains
          mpas_scalar_eddy_mix, mpas_u_vadv_order,                                             &
          mpas_w_vadv_order, mpas_theta_vadv_order, mpas_scalar_vadv_order,                    &
          mpas_scalar_advection, mpas_positive_definite, mpas_monotonic, mpas_coef_3rd_order,  &
-         mpas_smagorinsky_coef, mpas_mix_full, mpas_epssm, mpas_smdiv, mpas_apvm_upwinding,   &
+         mpas_smagorinsky_coef, mpas_mix_full, mpas_smdiv, mpas_apvm_upwinding,   &
          mpas_h_ScaleWithMesh
     !
     namelist /mpas_damping/ mpas_zd, mpas_xnutr, mpas_cam_coef, mpas_cam_damping_levels,      &
          mpas_rayleigh_damp_u, mpas_rayleigh_damp_u_timescale_days,                           &
-         mpas_number_rayleigh_damp_u_levels
+         mpas_number_rayleigh_damp_u_levels, mpas_epssm_minimum, mpas_epssm_maximum,          &
+         mpas_epssm_transition_bottom_z, mpas_epssm_transition_top_z
     !
     namelist /mpas_limited_area/  mpas_apply_lbcs, mpas_lbc_w
     !
@@ -850,10 +904,17 @@ contains
     namelist /mpas_restart/ mpas_do_restart
     !
     namelist /mpas_printout/ mpas_print_global_minmax_vel, mpas_print_detailed_minmax_vel,    &
-         mpas_print_global_minmax_sca
+         mpas_print_global_minmax_sca, mpas_print_global_minmax_tend_ps,                      &
+         mpas_print_detailed_minmax_tend_ps
     !
     namelist /mpas_physics/ mpas_sfc_albedo, mpas_frac_seaice, mpas_lsm_scheme
-
+    !
+    namelist /mpas_nam_stochy/ mpas_do_sppt, mpas_do_skeb, mpas_spptint, mpas_sppt_1,         &
+         mpas_sppt_2, mpas_sppt_3, mpas_sppt_tau_1, mpas_sppt_tau_2, mpas_sppt_tau_3,         &
+         mpas_sppt_lscale_1, mpas_sppt_lscale_2, mpas_sppt_lscale_3, mpas_sppt_logit,         &
+         mpas_sppt_sfclimit, mpas_iseed_sppt1, mpas_iseed_sppt2, mpas_iseed_sppt3,            &
+         mpas_sppt_hgt_top1, mpas_sppt_hgt_top2, mpas_stochini
+>>>>>>> d670e19dcf67d670b524f6b6b0312f3242a8d243
     ! These configuration parameters must be set in the MPAS configPool, but can't be changed
     ! in UFS. *From CAM src/dynamics/mpas/dyn_comp.F90*
     integer                :: config_num_halos = 2
@@ -900,6 +961,9 @@ contains
           ! "physics"
           read(nml_funit, nml=mpas_physics, iostat=io)
           if (io .ne. 0) call mpas_log_write(subname // ' Reading in MPAS namelist mpas_physics',messageType=MPAS_LOG_CRIT)
+          ! nam_stochy
+          read(nml_funit, nml=mpas_nam_stochy, iostat=io)
+          if (io .ne. 0) call mpas_log_write(subname // ' Reading in MPAS namelist mpas_nam_stochy',messageType=MPAS_LOG_CRIT)
        endif
     endif
 
@@ -940,7 +1004,7 @@ contains
     call mpi_bcast(mpas_coef_3rd_order,                 1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_smagorinsky_coef,               1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_mix_full,                       1, mpi_logical,   master, mpicomm, mpierr)
-    call mpi_bcast(mpas_epssm,                          1, mpi_real8,     master, mpicomm, mpierr)
+    !call mpi_bcast(mpas_epssm,                          1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_smdiv,                          1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_apvm_upwinding,                 1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_h_ScaleWithMesh,                1, mpi_logical,   master, mpicomm, mpierr)
@@ -952,6 +1016,10 @@ contains
     call mpi_bcast(mpas_rayleigh_damp_u,                1, mpi_logical,   master, mpicomm, mpierr)
     call mpi_bcast(mpas_rayleigh_damp_u_timescale_days, 1, mpi_real8,     master, mpicomm, mpierr)
     call mpi_bcast(mpas_number_rayleigh_damp_u_levels,  1, mpi_integer,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_epssm_minimum,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_epssm_maximum,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_epssm_transition_bottom_z,      1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_epssm_transition_top_z,         1, mpi_real8,     master, mpicomm, mpierr)
     !
     call mpi_bcast(mpas_apply_lbcs,                     1, mpi_logical,   master, mpicomm, mpierr)
     call mpi_bcast(mpas_lbc_w,                    StrKIND, mpi_character, master, mpicomm, mpierr)
@@ -973,6 +1041,29 @@ contains
     call mpi_bcast(mpas_frac_seaice,                    1, mpi_logical,   master, mpicomm, mpierr)
     call mpi_bcast(mpas_lsm_scheme,               StrKIND, mpi_character, master, mpicomm, mpierr)
 
+    call mpi_bcast(mpas_print_global_minmax_tend_ps,    1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_print_detailed_minmax_tend_ps,  1, mpi_logical,   master, mpicomm, mpierr)
+    !
+    call mpi_bcast(mpas_do_sppt,                        1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_do_skeb,                        1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_spptint,                        1, mpi_integer,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_1,                         1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_2,                         1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_3,                         1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_tau_1,                     1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_tau_2,                     1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_tau_3,                     1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_lscale_1,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_lscale_2,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_lscale_3,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_sfclimit,                  1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_logit,                     1, mpi_logical,   master, mpicomm, mpierr)
+    call mpi_bcast(mpas_iseed_sppt1,              StrKIND, mpi_character, master, mpicomm, mpierr)
+    call mpi_bcast(mpas_iseed_sppt2,              StrKIND, mpi_character, master, mpicomm, mpierr)
+    call mpi_bcast(mpas_iseed_sppt3,              StrKIND, mpi_character, master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_hgt_top1,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_sppt_hgt_top2,                  1, mpi_real8,     master, mpicomm, mpierr)
+    call mpi_bcast(mpas_stochini,                       1, mpi_logical,   master, mpicomm, mpierr)
     !
     ! Set MPAS configuration information pool variables
     !
@@ -1007,7 +1098,7 @@ contains
     call mpas_pool_add_config(configPool, 'config_coef_3rd_order',                 real(mpas_coef_3rd_order,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_smagorinsky_coef',               real(mpas_smagorinsky_coef,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_mix_full',                       mpas_mix_full)
-    call mpas_pool_add_config(configPool, 'config_epssm',                          real(mpas_epssm,kind=RKIND))
+    !call mpas_pool_add_config(configPool, 'config_epssm',                          real(mpas_epssm,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_smdiv',                          real(mpas_smdiv,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_apvm_upwinding',                 real(mpas_apvm_upwinding,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_h_ScaleWithMesh',                mpas_h_ScaleWithMesh)
@@ -1019,6 +1110,10 @@ contains
     call mpas_pool_add_config(configPool, 'config_rayleigh_damp_u',                mpas_rayleigh_damp_u)
     call mpas_pool_add_config(configPool, 'config_rayleigh_damp_u_timescale_days', real(mpas_rayleigh_damp_u_timescale_days,kind=RKIND))
     call mpas_pool_add_config(configPool, 'config_number_rayleigh_damp_u_levels',  mpas_number_rayleigh_damp_u_levels)
+    call mpas_pool_add_config(configPool, 'config_epssm_minimum',                  real(mpas_epssm_minimum))
+    call mpas_pool_add_config(configPool, 'config_epssm_maximum',                  real(mpas_epssm_maximum))
+    call mpas_pool_add_config(configPool, 'config_epssm_transition_bottom_z',      real(mpas_epssm_transition_bottom_z))
+    call mpas_pool_add_config(configPool, 'config_epssm_transition_top_z',         real(mpas_epssm_transition_top_z))
     !
     call mpas_pool_add_config(configPool, 'config_apply_lbcs',                     mpas_apply_lbcs)
     call mpas_pool_add_config(configPool, 'config_lbc_w',                          mpas_lbc_w)
@@ -1035,11 +1130,34 @@ contains
     call mpas_pool_add_config(configPool, 'config_print_global_minmax_vel',        mpas_print_global_minmax_vel)
     call mpas_pool_add_config(configPool, 'config_print_detailed_minmax_vel',      mpas_print_detailed_minmax_vel)
     call mpas_pool_add_config(configPool, 'config_print_global_minmax_sca',        mpas_print_global_minmax_sca)
+    call mpas_pool_add_config(configPool, 'config_print_global_minmax_tend_ps',    mpas_print_global_minmax_tend_ps)
+    call mpas_pool_add_config(configPool, 'config_print_detailed_minmax_tend_ps',  mpas_print_detailed_minmax_tend_ps)
     !
     call mpas_pool_add_config(configPool, 'config_sfc_albedo',                     mpas_sfc_albedo)
     call mpas_pool_add_config(configPool, 'config_frac_seaice',                    mpas_frac_seaice)
     call mpas_pool_add_config(configPool, 'config_lsm_scheme',                     mpas_lsm_scheme)
-
+    !
+    call mpas_pool_add_config(configPool, 'do_sppt',                               mpas_do_sppt)
+    call mpas_pool_add_config(configPool, 'do_skeb',                               mpas_do_skeb)
+    call mpas_pool_add_config(configPool, 'config_spptint',                        mpas_spptint)
+    call mpas_pool_add_config(configPool, 'config_sppt_1',                         real(mpas_sppt_1))
+    call mpas_pool_add_config(configPool, 'config_sppt_2',                         real(mpas_sppt_2))
+    call mpas_pool_add_config(configPool, 'config_sppt_3',                         real(mpas_sppt_3))
+    call mpas_pool_add_config(configPool, 'config_sppt_tau_1',                     real(mpas_sppt_tau_1))
+    call mpas_pool_add_config(configPool, 'config_sppt_tau_2',                     real(mpas_sppt_tau_2))
+    call mpas_pool_add_config(configPool, 'config_sppt_tau_3',                     real(mpas_sppt_tau_3))
+    call mpas_pool_add_config(configPool, 'config_sppt_lscale_1',                  real(mpas_sppt_lscale_1))
+    call mpas_pool_add_config(configPool, 'config_sppt_lscale_2',                  real(mpas_sppt_lscale_2))
+    call mpas_pool_add_config(configPool, 'config_sppt_lscale_3',                  real(mpas_sppt_lscale_3))
+    call mpas_pool_add_config(configPool, 'config_sppt_logit',                     mpas_sppt_logit)
+    call mpas_pool_add_config(configPool, 'config_sppt_sfclimit',                  mpas_sppt_sfclimit)
+    call mpas_pool_add_config(configPool, 'config_iseed_sppt1',                    mpas_iseed_sppt1)
+    call mpas_pool_add_config(configPool, 'config_iseed_sppt2',                    mpas_iseed_sppt2)
+    call mpas_pool_add_config(configPool, 'config_iseed_sppt3',                    mpas_iseed_sppt3)
+    call mpas_pool_add_config(configPool, 'config_sppt_hgt_top1',                  real(mpas_sppt_hgt_top1))
+    call mpas_pool_add_config(configPool, 'config_sppt_hgt_top2',                  real(mpas_sppt_hgt_top2))
+    call mpas_pool_add_config(configPool, 'config_stochini',                       mpas_stochini)
+    
     ! Set some configuration parameters that cannot be changed by UFSATM. *From CAM src/dynamics/mpas/dyn_comp.F90*
     call mpas_pool_add_config(configPool, 'config_num_halos',                      config_num_halos)
     call mpas_pool_add_config(configPool, 'config_number_of_blocks',               config_number_of_blocks)
@@ -1080,7 +1198,6 @@ contains
        call mpas_log_write('   mpas_coef_3rd_order                 = '//int2str(int(mpas_coef_3rd_order)))
        call mpas_log_write('   mpas_smagorinsky_coef               = '//int2str(int(mpas_smagorinsky_coef)))
        call mpas_log_write('   mpas_mix_full                       = '//log2str(mpas_mix_full))
-       call mpas_log_write('   mpas_epssm                          = '//int2str(int(mpas_epssm)))
        call mpas_log_write('   mpas_smdiv                          = '//int2str(int(mpas_smdiv)))
        call mpas_log_write('   mpas_apvm_upwinding                 = '//int2str(int(mpas_apvm_upwinding)))
        call mpas_log_write('   mpas_h_ScaleWithMesh                = '//log2str(mpas_h_ScaleWithMesh))
@@ -1091,6 +1208,10 @@ contains
        call mpas_log_write('   mpas_rayleigh_damp_u                = '//log2str(mpas_rayleigh_damp_u))
        call mpas_log_write('   mpas_rayleigh_damp_u_timescale_days = '//int2str(int(mpas_rayleigh_damp_u_timescale_days)))
        call mpas_log_write('   mpas_number_rayleigh_damp_u_levels  = '//int2str(mpas_number_rayleigh_damp_u_levels))
+       call mpas_log_write('   mpas_epssm_minimum                  = '//int2str(int(mpas_epssm_minimum)))
+       call mpas_log_write('   mpas_epssm_maximum                  = '//int2str(int(mpas_epssm_maximum)))
+       call mpas_log_write('   mpas_epssm_transition_bottom_z      = '//int2str(int(mpas_epssm_transition_bottom_z)))
+       call mpas_log_write('   mpas_epssm_transition_top_z         = '//int2str(int(mpas_epssm_transition_top_z)))
        call mpas_log_write('   mpas_apply_lbcs                     = '//log2str(mpas_apply_lbcs))
        call mpas_log_write('   mpas_lbc_w                          = '//trim(mpas_lbc_w))
        call mpas_log_write('   mpas_pio_num_iotasks                = '//int2str(mpas_pio_num_iotasks))
@@ -1101,10 +1222,32 @@ contains
        call mpas_log_write('   mpas_print_global_minmax_vel        = '//log2str(mpas_print_global_minmax_vel))
        call mpas_log_write('   mpas_print_detailed_minmax_vel      = '//log2str(mpas_print_detailed_minmax_vel))
        call mpas_log_write('   mpas_print_global_minmax_sca        = '//log2str(mpas_print_global_minmax_sca))
+       call mpas_log_write('   mpas_print_global_minmax_tend_ps    = '//log2str(mpas_print_global_minmax_tend_ps))
+       call mpas_log_write('   mpas_print_detailed_minmax_tend_ps  = '//log2str(mpas_print_detailed_minmax_tend_ps))
        call mpas_log_write('   mpas_sfc_albedo                     = '//log2str(mpas_sfc_albedo))
        call mpas_log_write('   mpas_frac_seaice                    = '//log2str(mpas_frac_seaice))
        call mpas_log_write('   mpas_lsm_scheme                     = '//trim(mpas_lsm_scheme))
-
+       call mpas_log_write('----------------------------- stochastic physics namelist -------------------------------')
+       call mpas_log_write('   do_sppt                             = '//log2str(mpas_do_sppt))
+       call mpas_log_write('   do_skeb                             = '//log2str(mpas_do_skeb))
+       call mpas_log_write('   mpas_spptint                        = '//int2str(mpas_spptint))
+       call mpas_log_write('   mpas_sppt_1                         = '//int2str(int(mpas_sppt_1)))
+       call mpas_log_write('   mpas_sppt_2                         = '//int2str(int(mpas_sppt_2)))
+       call mpas_log_write('   mpas_sppt_3                         = '//int2str(int(mpas_sppt_3)))
+       call mpas_log_write('   mpas_sppt_tau_1                     = '//int2str(int(mpas_sppt_tau_1)))
+       call mpas_log_write('   mpas_sppt_tau_2                     = '//int2str(int(mpas_sppt_tau_2)))
+       call mpas_log_write('   mpas_sppt_tau_3                     = '//int2str(int(mpas_sppt_tau_3)))
+       call mpas_log_write('   mpas_sppt_lscale_1                  = '//int2str(int(mpas_sppt_lscale_1)))
+       call mpas_log_write('   mpas_sppt_lscale_2                  = '//int2str(int(mpas_sppt_lscale_2)))
+       call mpas_log_write('   mpas_sppt_lscale_3                  = '//int2str(int(mpas_sppt_lscale_3)))
+       call mpas_log_write('   mpas_sppt_logit                     = '//log2str(mpas_sppt_logit))
+       call mpas_log_write('   mpas_sppt_sfclimit                  = '//log2str(mpas_sppt_sfclimit))
+       call mpas_log_write('   mpas_iseed_sppt1                    = '//trim(mpas_iseed_sppt1))
+       call mpas_log_write('   mpas_iseed_sppt2                    = '//trim(mpas_iseed_sppt1))
+       call mpas_log_write('   mpas_iseed_sppt3                    = '//trim(mpas_iseed_sppt1))
+       call mpas_log_write('   mpas_sppt_hgt_top1                  = '//int2str(int(mpas_sppt_hgt_top1)))
+       call mpas_log_write('   mpas_sppt_hgt_top2                  = '//int2str(int(mpas_sppt_hgt_top2)))
+       call mpas_log_write('   mpas_sppt_stochini                  = '//log2str(mpas_stochini))
     end if
  end subroutine read_mpas_namelist
 

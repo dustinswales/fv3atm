@@ -240,7 +240,7 @@ contains
     real(kind=RKIND), pointer :: mass(:,:), mass_edge(:,:), exner(:,:), theta_m(:,:), zgrid(:,:), zz(:,:)
     real(kind=RKIND), pointer :: pressure_b(:,:), pressure_p(:,:)
     real(kind=RKIND), pointer :: tend_u_phys(:,:)
-    real(kind=RKIND), pointer :: tend_uzonal(:,:), tend_umerid(:,:), tend_rtheta_phys(:,:)
+    real(kind=RKIND), pointer :: tend_uzonal(:,:), tend_umerid(:,:), tend_rtheta_phys(:,:), pattern(:,:)
     real(kind=RKIND), pointer :: tend_rho_phys(:,:), tend_ru_phys(:,:)
     real(kind=RKIND), pointer :: scalars(:,:,:), tend_scalars(:,:,:)
     real(kind=RKIND), pointer :: surface_pressure(:)
@@ -259,6 +259,7 @@ contains
     integer :: iCol,iLay,ithread,iTracer
     real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
     logical, allocatable :: per_kg(:)
+    logical, pointer :: do_sppt
     real(kind=RKIND), pointer :: config_dt
     integer :: iq_v
     real(kind=8) :: rv0, qv0, qv1, dqv, dq, qx0, den, drdt
@@ -332,6 +333,31 @@ contains
     tend_rtheta_phys(:,:) = 0._RKIND
     tend_rho_phys(:,:)    = 0._RKIND
     tend_ru_phys(:,:)     = 0._RKIND
+
+    !> #####################################################################################
+    !> 0) Stochastic physics (physics processes)
+    !> #####################################################################################
+    call mpas_pool_get_config(domain_ptr % blocklist % configs, 'do_sppt', do_sppt)
+
+    ! Call stochastic physics (SPPT) for (hydrostatic) physics tendencies.
+    if (do_sppt) then
+       ! Grab stochastic physics pattern.
+       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'tend_physics', tend_physics_pool)
+       call mpas_pool_get_array(tend_physics_pool,'stoch_pattern_sppt',pattern)
+
+       ! Apply pattern to scheme tendencies
+       do ithread = 1,nThreads
+          do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
+             do iLay = 1,nVertLevels
+                stateout % ten_u_conv(iCol,iLay) = stateout % ten_u_conv(iCol,iLay) * pattern(ilay,iCol)
+                stateout % ten_v_conv(iCol,iLay) = stateout % ten_v_conv(iCol,iLay) * pattern(ilay,iCol)
+                stateout % ten_u_pbl(iCol,iLay)  = stateout % ten_u_pbl(iCol,iLay)  * pattern(ilay,iCol)
+                stateout % ten_v_pbl(iCol,iLay)  = stateout % ten_v_pbl(iCol,iLay)  * pattern(ilay,iCol)
+             end do
+          end do
+       end do
+
+    end if
 
     !> #####################################################################################
     !> 1) Update MPAS tendency "tend_scalars".
@@ -417,6 +443,18 @@ contains
     ! Update halo points.
     call dyn_mpas_exchange_halo('tend_ru_physics',.true.)
 
+    !> #####################################################################################
+    !> 4) Stochastic physics (non-hydrostatic physics)
+    !> #####################################################################################
+    ! Call stochastic physics (SPPT) for (non-hydrostatic) physics tendencies.
+    if (do_sppt) then
+       ! Grab stochastic physics pattern.
+       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'tend_physics', tend_physics_pool)
+       call mpas_pool_get_array(tend_physics_pool,'stoch_pattern_sppt',pattern)
+
+       ! Apply pattern to accumulated tendencies.
+    end if
+    
     !> #####################################################################################
     !> Diagnostics
     !> #####################################################################################
