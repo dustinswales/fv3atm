@@ -795,7 +795,7 @@ contains
     integer                 :: mpas_number_rayleigh_damp_u_levels  = 6
     real(r8)                :: mpas_epssm_minimum                  = 0.1
     real(r8)                :: mpas_epssm_maximum                  = 0.5
-    real(r8)                :: mpas_epssm_transition_bottom_z      = 3000.
+    real(r8)                :: mpas_epssm_transition_bottom_z      = 30000.
     real(r8)                :: mpas_epssm_transition_top_z         = 50000.
     ! Namelist limited_area
     logical                 :: mpas_apply_lbcs                     = .false.
