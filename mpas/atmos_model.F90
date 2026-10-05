@@ -12,17 +12,17 @@ module atmos_model_mod
   use mpas_kind_types,       only : RKIND
   use ufs_mpas_constituents, only : constituent_name, is_water_species, constituent_type
   ! CCPP
-  use CCPP_data,             only : UFSATM_control      => GFS_control
-  use CCPP_data,             only : UFSATM_intdiag      => GFS_intdiag
-  use CCPP_data,             only : UFSATM_interstitial => GFS_interstitial
-  use CCPP_data,             only : UFSATM_grid         => GFS_grid
-  use CCPP_data,             only : UFSATM_tbd          => GFS_tbd
-  use CCPP_data,             only : UFSATM_sfcprop      => GFS_sfcprop
-  use CCPP_data,             only : UFSATM_statein      => GFS_statein
-  use CCPP_data,             only : UFSATM_stateout     => GFS_stateout
-  use CCPP_data,             only : UFSATM_cldprop      => GFS_cldprop
-  use CCPP_data,             only : UFSATM_radtend      => GFS_radtend
-  use CCPP_data,             only : UFSATM_coupling     => GFS_coupling
+  use CCPP_data,             only : control      => GFS_control
+  use CCPP_data,             only : diag         => GFS_intdiag
+  use CCPP_data,             only : interstitial => GFS_interstitial
+  use CCPP_data,             only : grid         => GFS_grid
+  use CCPP_data,             only : tbd          => GFS_tbd
+  use CCPP_data,             only : surface      => GFS_sfcprop
+  use CCPP_data,             only : statein      => GFS_statein
+  use CCPP_data,             only : stateout     => GFS_stateout
+  use CCPP_data,             only : cldprop      => GFS_cldprop
+  use CCPP_data,             only : radiation    => GFS_radtend
+  use CCPP_data,             only : coupling     => GFS_coupling
   use CCPP_driver,           only : ccpp_suite
   use CCPP_driver,           only : CCPP_step
   ! MPAS
@@ -266,6 +266,12 @@ contains
     nthrds = 1
 #endif
 
+    if (dycore_only) then
+       stop_time = MPI_Wtime()
+       atmiClock = atmiClock + (stop_time - start_time)
+       return
+    end if
+
     ! Number of physics blocks
     Atmos % nblks = nCellsSolve / blocksize
     if (mod(nCellsSolve, blocksize) .gt. 0) Atmos % nblks = Atmos % nblks + 1
@@ -276,7 +282,7 @@ contains
     blksz(:) = blocksize
     blksz(Atmos % nblks) = nCellsSolve - (Atmos % nblks - 1)*blocksize
 
-    allocate(UFSATM_interstitial(nthrds+1))
+    allocate(interstitial(nthrds+1))
 
     ! Update time (UFS specific time formatting array)
     bdat(:) = 0
@@ -301,15 +307,14 @@ contains
                                           intArgs=(/lonr, latr, nCellsGlobal/))
 
     ! Read in physics namelist and allocate data containers.
-    call MPAS_initialize(UFSATM_control, UFSATM_intdiag, UFSATM_grid, UFSATM_tbd, UFSATM_sfcprop, &
-         UFSATM_statein, UFSATM_stateout, UFSATM_cldprop, UFSATM_radtend, UFSATM_coupling,        &
-         me, master, mpicomm, nlevs, dt_dyn, dt_phys, nml_funit, nml_filename, bdat, cdat, nwat,  &
-         fcst_ntasks, blksz, input_nml_file, constituent_name, constituent_type, restart,         &
-         gnx=lonr, gny=latr, p_ref=real(p_ref, MPAS_kind_phys))
+    call MPAS_initialize(control, diag, grid, tbd, surface, statein, stateout, cldprop, radiation,&
+         coupling, me, master, mpicomm, nlevs, dt_dyn, dt_phys, nml_funit, nml_filename, bdat,    &
+         cdat, nwat, fcst_ntasks, blksz, input_nml_file, constituent_name, constituent_type,      &
+         restart, gnx=lonr, gny=latr, p_ref=real(p_ref, MPAS_kind_phys))
 
     ! Radiation intervals must be integer multiples of the physics time step.
-    call check_radiation_interval('fhswr', UFSATM_control%fhswr, UFSATM_control%dtp)
-    call check_radiation_interval('fhlwr', UFSATM_control%fhlwr, UFSATM_control%dtp)
+    call check_radiation_interval('fhswr', control%fhswr, control%dtp)
+    call check_radiation_interval('fhlwr', control%fhlwr, control%dtp)
     
     !> Read and initialize landuse fields needed by surface physics.
     call ufs_mpas_landuse_read(mpicomm, me, master)
@@ -322,10 +327,10 @@ contains
 
     ! Populate UFSATM data containers with MPAS "input" stream. We need to do this becuase
     ! we are calling the physics before the MPAS dynamical core.
-    call ufs_mpas_grid_to_physics(UFSATM_grid)
-    call ufs_mpas_sfc_to_physics(UFSATM_sfcprop, UFSatm_control)
-    call ufs_mpas_gwd_to_physics(UFSATM_control, UFSATM_sfcprop)
-    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_stateout, UFSATM_sfcprop, UFSATM_radtend, mpas_from_ufs_cnst)
+    call ufs_mpas_grid_to_physics(grid)
+    call ufs_mpas_sfc_to_physics(surface, control)
+    call ufs_mpas_gwd_to_physics(control, surface)
+    call ufs_mpas_to_physics(statein, stateout, surface, radiation, mpas_from_ufs_cnst)
 
     ! Register CCPP
     call CCPP_step (step="register", nblks=Atmos % nblks, ierr=ierr, dycore='mpas')
@@ -402,19 +407,19 @@ contains
     ! Update physics time
     jdat(:) = 0
     call ESMF_TimeGet (Atmos%CurrTime, YY=jdat(1),MM=jdat(2),DD=jdat(3),H=jdat(5),M=jdat(6),S=jdat(7),rc=rc)
-    UFSATM_control%jdat(:) = jdat(:)
+    control%jdat(:) = jdat(:)
 
     ! Update surface properties for this day? (doyc is set to -999 in init to trigger here)
     call ESMF_TimeGet(Atmos%CurrTime, dayOfYear=doy, rc=rc)
     if ((doy .gt. doyc) .or. doyc==-999) then
        call ESMF_TimeGet(Atmos%CurrTime, MM=moy, rc=rc)
        call ESMF_TimeGet(Atmos%CurrTime, DD=dom, rc=rc)
-       call ufs_mpas_surface_update(dom, moy, UFSATM_sfcprop)
+       call ufs_mpas_surface_update(dom, moy, control, surface)
        doyc = doy
     endif
 
     ! Populate physics inputs with MPAS data.
-    call ufs_mpas_to_physics(UFSATM_statein, UFSATM_stateout, UFSATM_sfcprop, UFSATM_radtend, mpas_from_ufs_cnst)
+    call ufs_mpas_to_physics(statein, stateout, surface, radiation, mpas_from_ufs_cnst)
 
     ! Call CCPP Timestep_initialize Group
     start_time = MPI_Wtime()
@@ -425,32 +430,18 @@ contains
 
     ! Initialize prognostic ozone tracer. Not needed for restart, since o3mmr comes from restart files.
     ! DJS2026: UFS-MPAS ICs should include ozone?
-    if (UFSATM_control%first_time_step .and. .not. UFSATM_control%restart) then
-       call ufs_mpas_ozone_init(UFSATM_control, UFSATM_tbd, UFSATM_statein, UFSATM_stateout, mpas_from_ufs_cnst)
+    if (control%first_time_step .and. .not. control%restart) then
+       call ufs_mpas_ozone_init(control, tbd, statein, stateout, mpas_from_ufs_cnst)
     end if
     
     ! Call CCPP Radiation Group
     start_time = MPI_Wtime()
-    if (UFSATM_control%lsswr .or. UFSATM_control%lslwr) then
+    if (control%lsswr .or. control%lslwr) then
        call CCPP_step (step="radiation", nblks=Atmos % nblks, ierr=ierr, dycore='mpas')
        if (ierr/=0) call mpas_log_write(subname // " ERROR: Call to CCPP radiation step failed",messageType=MPAS_LOG_CRIT)
     endif
     stop_time = MPI_Wtime()
     radClock = radClock + (stop_time - start_time)
-    if (UFSATM_control%lsswr .and. UFSATM_control%me == UFSATM_control%master) then
-       write(0,'(a,i6,1x,i4.4,4i3.2,a,f9.5,a,f7.0,a,f9.5,a,f9.5,a,f9.3)') &
-            'SUNTIME UFS  kdt=', UFSATM_control%kdt,                            &
-            UFSATM_control%jdat(1), UFSATM_control%jdat(2), UFSATM_control%jdat(3), &
-            UFSATM_control%jdat(5), UFSATM_control%jdat(6),                    &
-            ' solhr=', UFSATM_control%solhr,                                   &
-            ' fhswr=', UFSATM_control%fhswr,                                   &
-            ' eot[min]=', UFSATM_control%slag*720._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys, &
-            ' tsolar0[h]=', UFSATM_control%solhr + UFSATM_control%fhswr/7200._MPAS_kind_phys &
-                          + UFSATM_control%slag*12._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys, &
-            ' solcon=', UFSATM_control%solcon
-       write(0,'(a,f9.4)') 'SUNTIME UFS  declination[deg]=', &
-            asin(UFSATM_control%sdec)*180._MPAS_kind_phys/3.14159265358979_MPAS_kind_phys
-    end if
     
     ! Call CCPP Physics Group
     start_time = MPI_Wtime()
@@ -459,34 +450,14 @@ contains
     stop_time = MPI_Wtime()
     physClock = physClock + (stop_time - start_time)
 
-    if (UFSATM_control%kdt <= 10) then
-       do i = 1, size(UFSATM_statein%prsl,1)
-          if (abs(latCell(i)*57.2958 - 20.) < 0.8 .and. abs(lonCell(i)*57.2958 - 200.) < 0.8) then
-             rho1 = UFSATM_statein%prsl(i,1) / (rd*UFSATM_statein%tgrs(i,1)* &
-                  (1. + fv*UFSATM_statein%qgrs(i,1,UFSATM_control%ntqv)))
-             E  = rho1 * UFSATM_sfcprop%evap(i)
-             Qp = 0.
-             do k = 1, size(UFSATM_statein%prsl,2)
-                Qp = Qp + UFSATM_stateout%dqdt(i,k,UFSATM_control%ntqv) * &
-                     (UFSATM_statein%prsi(i,k) - UFSATM_statein%prsi(i,k+1)) / g
-             end do
-             write(0,'(a,i4,i7,3es12.4,f8.3)') 'QBUDGET UFS kdt i E Qp Qp/E ', &
-                  UFSATM_control%kdt, i, E, Qp, Qp/max(E,1.e-12), 0.
-             write(0,'(a,i4,i7,6es11.3)') 'QBUDGET UFS dqdt k=1..3 & slmsk', UFSATM_control%kdt, i, &
-                  UFSATM_stateout%dqdt(i,1:3,UFSATM_control%ntqv), UFSATM_sfcprop%slmsk(i), &
-                  UFSATM_sfcprop%evap(i), rho1
-          end if
-       end do
-    end if
-
     ! Update radiative surface properties from LSM
-    call ufs_mpas_sfc_rad_update(UFSATM_sfcprop, UFSATM_control)
+    call ufs_mpas_sfc_rad_update(surface, control)
 
     ! Populate MPAS pools with physics data (for diagnostics).
-    call ufs_mpas_phys_diag(UFSATM_statein, UFSATM_control, UFSATM_radtend, UFSATM_intdiag, UFSATM_tbd, UFSATM_sfcprop)
+    call ufs_mpas_phys_diag(statein, control, radiation, diag, tbd, surface)
 
     ! Prepare MPAS dycore inputs with CCPP physics outputs.
-    call ufs_physics_to_mpas(UFSATM_stateout, mpas_from_ufs_cnst)
+    call ufs_physics_to_mpas(stateout, mpas_from_ufs_cnst)
 
   end subroutine atmos_model_radiation_physics
 
@@ -517,7 +488,7 @@ contains
     real(MPAS_kind_phys) :: start_time, stop_time
 
     ! Prepare CCPP microphysics inputs with MPAS dycore outputs.
-    call ufs_mpas_to_microphysics(UFSATM_stateout, UFSATM_statein, mpas_from_ufs_cnst)
+    call ufs_mpas_to_microphysics(stateout, statein, mpas_from_ufs_cnst)
 
     ! Call CCPP Microphysics Group
     ! NOT YET IMPLEMENTED in SDF
@@ -535,9 +506,9 @@ contains
     setupClock = setupClock + (stop_time - start_time)
 
     ! Prepare MPAS dycore inputs with CCPP physics outputs.
-    call ufs_microphysics_to_mpas(UFSATM_stateout, mpas_from_ufs_cnst)
+    call ufs_microphysics_to_mpas(stateout, mpas_from_ufs_cnst)
 
-    UFSATM_control % first_time_step = .false.
+    control % first_time_step = .false.
 
   end subroutine atmos_model_microphysics
 
@@ -550,8 +521,8 @@ contains
     character(len=*), parameter :: subname = 'atmos_model::update_atmos_model_state'
 
     ! Advance time
-    !Atmos % Time = Atmos % Time + Atmos % Time_step
     Atmos % CurrTime = Atmos % CurrTime + Atmos % TimeStep
+
   end subroutine update_atmos_model_state
 
   !> ########################################################################################

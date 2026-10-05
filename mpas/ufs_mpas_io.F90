@@ -925,6 +925,7 @@ contains
           znt(iCol)      = 0.01_RKIND * surface%zorl(iCol)         ! cm             -> m
           chs(iCol)      = surface%flhc(iCol) / (rho_sfc * cp)     ! W m-2 K-1      -> m s-1
           cqs(iCol)      = surface%flqc(iCol) / rho_sfc            ! kg m-2 s-1     -> m s-1
+          rmol(iCol)     = surface%rmol(iCol)
           ust(iCol)      = surface%uustar(iCol)
           qsfc(iCol)     = surface%qss(iCol)
           t2m(iCol)      = surface%t2m(iCol)
@@ -932,18 +933,22 @@ contains
           skintemp(iCol) = surface%tsfc(iCol)
           sst(iCol)      = surface%tsfco(iCol)
           precipw(iCol)  = diagnostics%pwat(iCol)
-          if (nint(surface%slmsk(iCol)) == 1) mavail(iCol) = surface%wetness(iCol)
+          ! LSM (RUC)
+          if (control % lsm == control % lsm_ruc) then
+             if (nint(surface%slmsk(iCol)) == 1) mavail(iCol) = surface%wetness(iCol)
+          end if
           ! MONIN-OBUKHOV
           fm(iCol)     = surface%ffmm(iCol)
           fh(iCol)     = surface%ffhh(iCol)
           ! MYNN (surface-layer model)
-          ustm(iCol)   = surface%ustm(iCol)
-          chs2(iCol)   = surface%chs2(iCol)
-          cqs2(iCol)   = surface%cqs2(iCol)
-          zol(iCol)    = surface%zol(iCol)
-          mol(iCol)    = surface%mol(iCol)
-          rmol(iCol)   = surface%rmol(iCol)
-          lh(iCol)     = 2.5e6_RKIND * qfx(iCol)
+          if (control % do_mynnsfclay) then
+             ustm(iCol)   = surface%ustm(iCol)
+             chs2(iCol)   = surface%chs2(iCol)
+             cqs2(iCol)   = surface%cqs2(iCol)
+             zol(iCol)    = surface%zol(iCol)
+             mol(iCol)    = surface%mol(iCol)
+             lh(iCol)     = 2.5e6_RKIND * qfx(iCol)
+          endif
           ! MYNN (PBL)
           if (control % do_mynnedmf) then
              sh3d(:,iCol)       = tbd%sh3d(iCol,:)

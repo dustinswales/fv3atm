@@ -342,8 +342,7 @@ contains
     ! Call stochastic physics (SPPT) for (hydrostatic) physics tendencies.
     if (do_sppt) then
        ! Grab stochastic physics pattern.
-       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'tend_physics', tend_physics_pool)
-       call mpas_pool_get_array(tend_physics_pool,'stoch_pattern_sppt',pattern)
+       call mpas_pool_get_array(tend_phys,'stoch_pattern_sppt',pattern)
 
        ! Apply pattern to scheme tendencies
        do ithread = 1,nThreads
@@ -449,8 +448,7 @@ contains
     ! Call stochastic physics (SPPT) for (non-hydrostatic) physics tendencies.
     if (do_sppt) then
        ! Grab stochastic physics pattern.
-       call mpas_pool_get_subpool(domain_ptr % blocklist % structs, 'tend_physics', tend_physics_pool)
-       call mpas_pool_get_array(tend_physics_pool,'stoch_pattern_sppt',pattern)
+       call mpas_pool_get_array(tend_phys,'stoch_pattern_sppt',pattern)
 
        ! Apply pattern to accumulated tendencies.
     end if
@@ -859,14 +857,14 @@ contains
 !> Procedure to transfer MPAS information to physics srfprop DDT
 !>
 !> #########################################################################################
-  subroutine ufs_mpas_sfc_to_physics(surface, physics_control)
+  subroutine ufs_mpas_sfc_to_physics(surface, control)
     use GFS_typedefs,         only : GFS_sfcprop_type, GFS_control_type
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension, mpas_pool_get_array
     use mpas_kind_types,      only : RKIND, StrKIND
 
     ! Arguments
-    type(GFS_control_type),      intent(in) :: physics_control
+    type(GFS_control_type),      intent(in) :: control
     type(GFS_sfcprop_type),      intent(inout) :: surface
     ! Locals
     type(mpas_pool_type), pointer :: sfc_input, mesh, diag_phys
@@ -986,7 +984,7 @@ contains
         endif
 
         ! RUC specific fields (allocated wlen lsm=lsm_ruc)
-        if (physics_control % lsm == physics_control % lsm_ruc) then
+        if (control % lsm == control % lsm_ruc) then
           do iLev=1, nSoilLevels
             surface % sh2o(iCol, iLev)  = sh2o(iLev, iCol)
             surface % smois(iCol, iLev) = smois(iLev, iCol)
@@ -997,7 +995,7 @@ contains
         ! (4 for Noah/Noah-MP) -- not nSoilLevels, which is the MPAS IC's own soil
         ! discretization (9 here, a RUC-style IC) and can exceed Model%lsoil, so
         ! cap the loop or this overruns the smc/stc arrays.
-        do iLev=1, min(nSoilLevels, physics_control % lsoil)
+        do iLev=1, min(nSoilLevels, control % lsoil)
           surface % smc(iCol, iLev) = smois(iLev, iCol)
           surface % stc(iCol, iLev) = tslb(iLev, iCol)
        end do
@@ -1006,11 +1004,11 @@ contains
 
     !dzs is defined for every cell in the input data, but the variable in GFS_typedefs only has soil depth as a dimension (is
     !uniform for every grid cell)
-    !physics_control % dzs(1) = dzs(1,1)
-    !physics_control % zs(1) = -1*physics_control % dzs(1)
+    !control % dzs(1) = dzs(1,1)
+    !control % zs(1) = -1*control % dzs(1)
     !do iLev = 2, nSoilLevels
-    !  physics_control % dzs(iLev) = dzs(iLev,1)
-    !  physics_control % zs(iLev) = physics_control % zs(iLev-1) - physics_control % dzs(iLev)
+    !  control % dzs(iLev) = dzs(iLev,1)
+    !  control % zs(iLev) = control % zs(iLev-1) - control % dzs(iLev)
     !end do
 
 
@@ -1022,14 +1020,14 @@ contains
   !> sfc_albedo/sfc_emiss in driver_lsm and RRTMG reads them on the following call).
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_sfc_rad_update(surface, physics_control)
+  subroutine ufs_mpas_sfc_rad_update(surface, control)
     use GFS_typedefs,       only : GFS_sfcprop_type, GFS_control_type
     use mpas_derived_types, only : mpas_pool_type
     use mpas_pool_routines, only : mpas_pool_get_subpool, mpas_pool_get_array, &
                                    mpas_pool_get_dimension, mpas_pool_get_config
  
     type(GFS_sfcprop_type), intent(in) :: surface
-    type(GFS_control_type), intent(in) :: physics_control
+    type(GFS_control_type), intent(in) :: control
  
     type(mpas_pool_type), pointer :: diag_phys
     integer,  pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
@@ -1040,7 +1038,7 @@ contains
     real(RKIND), parameter :: alb_wat = 0.08_RKIND, ems_wat = 0.98_RKIND   ! MPAS open-water values
  
     ! Only meaningful when RUC provides the land/ice albedo and emissivity.
-    if (physics_control%lsm /= physics_control%lsm_ruc) return
+    if (control%lsm /= control%lsm_ruc) return
 
     ! Get dimension
     call mpas_pool_get_dimension(domain_ptr % blocklist % dimensions, 'nThreads',             nThreads)
@@ -1614,14 +1612,15 @@ contains
   !> Procedure to interpolate monthly surface data for current day.
   !>
   !> ########################################################################################
-  subroutine ufs_mpas_surface_update(day, month, surface)
+  subroutine ufs_mpas_surface_update(day, month, control, surface)
     use mpas_log,             only : mpas_log_write
     use mpas_derived_types,   only : MPAS_LOG_ERR, MPAS_LOG_WARN, MPAS_LOG_CRIT
     use mpas_derived_types,   only : mpas_pool_type
     use mpas_pool_routines,   only : mpas_pool_get_dimension, mpas_pool_get_array, mpas_pool_get_subpool
-    use GFS_typedefs,         only : GFS_sfcprop_type
+    use GFS_typedefs,         only : GFS_sfcprop_type, GFS_control_type
 
-    type(GFS_sfcprop_type),   intent(inout) :: surface
+    type(GFS_control_type), intent(in   ) :: control
+    type(GFS_sfcprop_type), intent(inout) :: surface
     integer, intent(in) :: day, month
     !
     integer, pointer :: nCellsSolve, landmask(:)
@@ -1680,9 +1679,12 @@ contains
     ! RUC only turns alvsf/alnsf/... into sfalb_lnd_bck inside lsm_ruc_init;
     ! lsm_ruc_run takes sfalb_lnd_bck as intent(in). Updating alvsf daily has
     ! no effect. Update the RUC background directly (land points only):
-    do iCell = 1, nCellsSolve
-       if (landmask(iCell) == 1) surface % sfalb_lnd_bck(iCell) = sfc_albbck(iCell)
-    enddo
+    ! RUC specific fields (allocated wlen lsm=lsm_ruc)
+    if (control % lsm == control % lsm_ruc) then
+       do iCell = 1, nCellsSolve
+          if (landmask(iCell) == 1) surface % sfalb_lnd_bck(iCell) = sfc_albbck(iCell)
+       enddo
+    endif
     !
     call mpas_log_write(subname //'   Finished updating MPAS surface radiative properties ', messageType=MPAS_LOG_WARN)
  end subroutine ufs_mpas_surface_update
