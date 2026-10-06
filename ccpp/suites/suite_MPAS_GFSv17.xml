@@ -34,8 +34,8 @@
   </group>
   <group name="microphysics">
     <subcycle loop="1">
-      <scheme>mp_thompson</scheme>
-      <scheme>mp_thompson_post</scheme>
+      <scheme>mp_tempo</scheme>
+      <scheme>mp_tempo_post</scheme>
       <scheme>GFS_MP_generic_post</scheme>
      </subcycle>
   </group>

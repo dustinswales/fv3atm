@@ -255,6 +255,8 @@ contains
     integer, pointer :: index_ni => null()
     integer, pointer :: index_nifa => null()
     integer, pointer :: index_nwfa => null()
+    integer, pointer :: index_sgs_tke => null()
+
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer :: iCol,iLay,ithread,iTracer
     real(kind=RKIND):: coeff, tem1, tem2, rho1, rho2, tend_th_phys
@@ -297,6 +299,7 @@ contains
     call mpas_pool_get_dimension(state_pool, 'index_ni',    index_ni)
     call mpas_pool_get_dimension(state_pool, 'index_nifa',  index_nifa)
     call mpas_pool_get_dimension(state_pool, 'index_nwfa',  index_nwfa)
+    call mpas_pool_get_dimension(state_pool, 'index_sgs_tke', index_sgs_tke)
 
     call mpas_pool_get_config(domain_ptr % blocklist % configs, 'config_dt', config_dt)
 
@@ -377,7 +380,16 @@ contains
               qx0  = max(0._RKIND, scalars(iTracer,iLay,iCol)) / (1._R8KIND + rv0)
               drdt = (dq*(1._R8KIND - qv0) + qx0*dqv) / den      ! d(mixing ratio)/dt
             else
-              drdt = dq                                          ! e.g. sgs_tke
+              drdt = dq                                         ! e.g. sgs_tke
+              ! TKE is updated in place by the PBL scheme (no tendency), so form one here.
+              ! DJS2026: MYNN-EDMF outputs the updated SGS TKE scaled by 2x. Is this needed
+              ! in MYNN?
+              if (associated(index_sgs_tke)) then
+                 if (iTracer == index_sgs_tke) then
+                    drdt = (stateout % gq0(iCol,iLay,mpas_from_ufs_cnst(iTracer)) - &
+                            max(0._RKIND, scalars(iTracer,iLay,iCol))) / config_dt
+                 end if
+              end if
             end if
             tend_scalars(iTracer,iLay,iCol) = tend_scalars(iTracer,iLay,iCol) + &
                  real(drdt, RKIND) * mass(iLay,iCol)
@@ -944,6 +956,7 @@ contains
         surface % srflag(iCol)          = 0.0_RKIND
         surface % shdmin(iCol)          = shdmin(iCol) * 0.01_RKIND   ! percent -> fraction
         surface % shdmax(iCol)          = shdmax(iCol) * 0.01_RKIND   ! percent -> fraction
+        surface % snoalb(iCol)          = snoalb(iCol)
         surface % tsfc(iCol)            = skintemp(iCol)
         surface % tsfcl(iCol)           = skintemp(iCol)
         surface % zorlw(iCol)           = znt(iCol)*100.0_RKIND
