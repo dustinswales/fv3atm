@@ -786,8 +786,8 @@ module GFS_typedefs
     integer              :: ny              !< number of points in the j-dir for this MPI-domain
     integer              :: levs            !< number of vertical levels
     !--- ak/bk for pressure level calculations (FV3 only -- its native hybrid coordinate)
-    real(kind=kind_phys), pointer :: ak(:)  !< from surface (k=1) to TOA (k=levs)
-    real(kind=kind_phys), pointer :: bk(:)  !< from surface (k=1) to TOA (k=levs)
+    real(kind=kind_phys), pointer :: ak(:) => null()  !< from surface (k=1) to TOA (k=levs)
+    real(kind=kind_phys), pointer :: bk(:) => null()  !< from surface (k=1) to TOA (k=levs)
     !--- dycore-neutral reference (background) pressure profile at layer interfaces, Pa.
     !    FV3 derives it from ak/bk below; MPAS supplies it directly (it has no hybrid
     !    coordinate to derive it from). This is what UGWPv1 actually consumes -- see
@@ -4752,11 +4752,13 @@ module GFS_typedefs
 
     !--- FV3's native hybrid sigma-pressure coordinate. FV3-specific; not used by UGWP
     !    or anything else that must run under multiple dycores -- see Model%p_ref below.
-    if (present(ak) .and. present(bk)) then
-       allocate (Model%ak(1:size(ak)))
-       allocate (Model%bk(1:size(bk)))
-       Model%ak               = ak
-       Model%bk               = bk
+    if (Model%dycore_active == Model%dycore_fv3) then
+       if (present(ak) .and. present(bk)) then
+          allocate (Model%ak(1:size(ak)))
+          allocate (Model%bk(1:size(bk)))
+          Model%ak               = ak
+          Model%bk               = bk
+       endif
     endif
 
     !--- Reference (background) pressure profile at layer interfaces, dycore neutral.

@@ -4165,6 +4165,7 @@
   dimensions = (vertical_interface_dimension)
   type = real
   kind = kind_phys
+  active = (dycore_active == dycore_fv3)
 [bk]
   standard_name = sigma_pressure_hybrid_coordinate_b_coefficient
   long_name = b parameter for sigma pressure level calculations
@@ -4172,6 +4173,7 @@
   dimensions = (vertical_interface_dimension)
   type = real
   kind = kind_phys
+  active = (dycore_active == dycore_fv3)
 [p_ref]
   standard_name = air_pressure_of_reference_atmosphere_at_interface
   long_name = pressure of a dycore-neutral reference atmosphere at layer interfaces, used to compute log-pressure height
