@@ -410,6 +410,14 @@ else()
 endif()
 
 #------------------------------------------------------------------------------
+# Add flag needed for logicals bits crossing a language or compiler boundary.
+# Needed by rte-rrtmgp. Intel only.
+#------------------------------------------------------------------------------
+if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+  set_property(SOURCE ${RRTMGP_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -fpscomp logicals)
+endif()
+
+#------------------------------------------------------------------------------
 # Set flags for 32-bit rte-rrtmgp radiation
 #------------------------------------------------------------------------------
 if(RRTMGP_32BIT)
