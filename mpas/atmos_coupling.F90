@@ -871,9 +871,11 @@ contains
 !> #########################################################################################
   subroutine ufs_mpas_sfc_to_physics(surface, control)
     use GFS_typedefs,         only : GFS_sfcprop_type, GFS_control_type
-    use mpas_derived_types,   only : mpas_pool_type
+    use mpas_derived_types,   only : mpas_pool_type, MPAS_LOG_WARN
     use mpas_pool_routines,   only : mpas_pool_get_subpool, mpas_pool_get_dimension, mpas_pool_get_array
     use mpas_kind_types,      only : RKIND, StrKIND
+    use mpas_log,             only : mpas_log_write
+    use mpas_dmpar,           only : mpas_dmpar_sum_int
 
     ! Arguments
     type(GFS_control_type),      intent(in) :: control
@@ -889,6 +891,9 @@ contains
     real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:), sfc_emiss(:)
     real(RKIND), pointer :: ter(:), shdmin(:), shdmax(:), snoalb(:)
     character(len=StrKIND), pointer :: mminlu
+    integer, pointer :: islake_lu
+    integer :: islake, nLakeLocal, nLakeGlobal
+    logical :: do_clm_lake
     character(len=*), parameter :: subname = 'atmos_coupling::ufs_mpas_sfc_to_physics'
 
     ! Get openMP information
@@ -930,10 +935,26 @@ contains
     call mpas_pool_get_array(sfc_input, 'canwat',    canwat)    !dim (nCells); water in canopy (kg m^-2)
     call mpas_pool_get_array(sfc_input, 'landusef',  landusef)
     call mpas_pool_get_array(sfc_input, 'soilf',     soilf)
+    call mpas_pool_get_array(sfc_input, 'islake_lu', islake_lu) ! lake land-use category (-1 = none)
     call mpas_pool_get_array(diag_phys, 'znt',       znt)       !dim (nCells); roughness length (m)
     call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo)!dim (nCells); surface albedo (fraction)
     call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss)
 
+    ! CLM lake: identify lake cells from the land-use data.
+    do_clm_lake = (control % lkm > 0 .and. control % iopt_lake == control % iopt_lake_clm)
+    islake      = -1
+    nLakeLocal  = 0
+    if (do_clm_lake) then
+       islake = islake_lu
+       if (islake < 1 .or. islake > size(landusef, 1)) then
+          call mpas_log_write(subname // ': init file has no lake land-use category (islake_lu = $i);' // &
+               ' CLM lake will not run. Regenerate the init file with a land-use dataset that has lakes.', &
+               intArgs=[islake_lu], messageType=MPAS_LOG_WARN)
+          islake = -1
+       endif
+    endif
+
+    !
     do ithread = 1,nThreads
       do iCol = cellSolveThreadStart(ithread),cellSolveThreadEnd(ithread)
         surface % tsfco(iCol)           = sst(iCol)
@@ -949,7 +970,8 @@ contains
         surface % canopy(iCol)          = canwat(iCol)
         surface % vtype(iCol)           = ivgtyp(iCol)
         surface % stype(iCol)           = isltyp(iCol)
-        surface % vegtype_frac(iCol,:)  = landusef(:,iCol)
+        surface % vegtype_frac(iCol,1:min(size(landusef,1),control%nvegcat)) = &
+             landusef(1:min(size(landusef,1),control%nvegcat),iCol)
         surface % soiltype_frac(iCol,:) = soilf(:,iCol)
         surface % fice(iCol)            = xice(iCol) 
         surface % tisfc(iCol)           = skintemp(iCol)
@@ -989,6 +1011,24 @@ contains
            end if
         endif
 
+        ! Lake cells: lake-dominant land-use category -> water with lakefrac/lakedepth.
+        ! (init_atmosphere's derive_landmask marks these as land, so override here.)
+        surface % lakefrac(iCol)  = 0.0_RKIND
+        surface % lakedepth(iCol) = -9999.0_RKIND
+        if (islake > 0) then
+           if (ivgtyp(iCol) == islake .and. landusef(islake,iCol) > control % lakefrac_threshold) then
+              surface % lakefrac(iCol)  = landusef(islake,iCol)
+              surface % lakedepth(iCol) = control % clm_lake_depth_default
+              surface % landfrac(iCol)  = 0.0_RKIND
+              surface % oceanfrac(iCol) = 0.0_RKIND
+              surface % slmsk(iCol)     = 0.0_RKIND
+              if (xice(iCol) > 0.0_RKIND) surface % slmsk(iCol) = 2.0_RKIND
+              ! MPAS sst is not meaningful over inland water; start from skin temperature.
+              surface % tsfco(iCol)     = skintemp(iCol)
+              nLakeLocal = nLakeLocal + 1
+           endif
+        endif
+
         ! Soild colots (depends on land/sea masking)
         if (nint (surface % slmsk(iCol)) == 1) then
           surface % scolor(iCol) = 4
@@ -1014,6 +1054,12 @@ contains
        end do
       end do
     end do
+
+    ! Write information on lake points to MPAS log file
+    if (islake > 0) then
+       call mpas_dmpar_sum_int(domain_ptr % dminfo, nLakeLocal, nLakeGlobal)
+       call mpas_log_write(subname // ': CLM lake category $i, $i lake cells', intArgs=[islake, nLakeGlobal])
+    endif
 
     !dzs is defined for every cell in the input data, but the variable in GFS_typedefs only has soil depth as a dimension (is
     !uniform for every grid cell)
