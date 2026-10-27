@@ -224,6 +224,7 @@ module ufs_mpas_io
        var_info_type('albedo12m'                       , 'real'      , 2), &
        var_info_type('landusef'                        , 'real'      , 2), &
        var_info_type('soilf'                           , 'real'      , 2), &
+       var_info_type('islake_lu'                       , 'integer'   , 0), &
        var_info_type('lai12m'                          , 'real'      , 2), &
        var_info_type('canwat'                          , 'real'      , 1), &
        var_info_type('soilcl1'                         , 'real'      , 1), &
