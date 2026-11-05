@@ -922,6 +922,7 @@ contains
                     (1._RKIND + (rv/rd - 1._RKIND) * statein%qgrs(iCol,1,control%ntqv)))
           hfx(iCol)      = rho_sfc * cp * surface%hflx(iCol)       ! K m s-1        -> W m-2
           qfx(iCol)      = rho_sfc * surface%evap(iCol)            ! kg kg-1 m s-1  -> kg m-2 s-1
+          lh(iCol)       = 2.5e6_RKIND * qfx(iCol)                 ! kg m-2 s-1     -> W m-2
           znt(iCol)      = 0.01_RKIND * surface%zorl(iCol)         ! cm             -> m
           chs(iCol)      = surface%flhc(iCol) / (rho_sfc * cp)     ! W m-2 K-1      -> m s-1
           cqs(iCol)      = surface%flqc(iCol) / rho_sfc            ! kg m-2 s-1     -> m s-1
@@ -947,7 +948,6 @@ contains
              cqs2(iCol)   = surface%cqs2(iCol)
              zol(iCol)    = surface%zol(iCol)
              mol(iCol)    = surface%mol(iCol)
-             lh(iCol)     = 2.5e6_RKIND * qfx(iCol)
           endif
           ! MYNN (PBL)
           if (control % do_mynnedmf) then
