@@ -2230,9 +2230,6 @@ module GFS_typedefs
 !---vay-2018 UGWP-diagnostics instantaneous
 !
 ! OGWs +NGWs
-    real (kind=kind_phys), pointer :: dudt_gw(:,:)   => null()  !<
-    real (kind=kind_phys), pointer :: dvdt_gw(:,:)   => null()  !<
-    real (kind=kind_phys), pointer :: dtdt_gw(:,:)   => null()  !<
     real (kind=kind_phys), pointer :: kdis_gw(:,:)   => null()  !<
 !oro-GWs
     real (kind=kind_phys), pointer :: dudt_ogw(:,:)  => null()  !<
@@ -8467,9 +8464,6 @@ module GFS_typedefs
     allocate (Diag%tau_ngw   (IM)           )
     allocate (Diag%tau_mtb   (IM)           )
     allocate (Diag%tau_tofd  (IM)           )
-    allocate (Diag%dudt_gw   (IM,Model%levs))
-    allocate (Diag%dvdt_gw   (IM,Model%levs))
-    allocate (Diag%dtdt_gw   (IM,Model%levs))
     allocate (Diag%kdis_gw   (IM,Model%levs))
 
     if (Model%ldiag_ugwp) then
@@ -8915,9 +8909,6 @@ module GFS_typedefs
     Diag%tau_ogw     = zero
     Diag%tau_ngw     = zero
     Diag%tau_tofd    = zero
-    Diag%dudt_gw     = zero
-    Diag%dvdt_gw     = zero
-    Diag%dtdt_gw     = zero
     Diag%kdis_gw     = zero
 
     Diag%dudt_ogw    = zero
