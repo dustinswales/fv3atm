@@ -174,7 +174,19 @@ module GFS_typedefs
     real (kind=kind_phys), pointer :: stc (:,:)   => null()  !< soil temperature content
     real (kind=kind_phys), pointer :: slc (:,:)   => null()  !< soil liquid water content
 
-    contains
+    !--- physics state from previous time step.
+    real (kind=kind_phys), pointer :: prevsu (:,:) => null()  !< zonal wind from previous time step
+    real (kind=kind_phys), pointer :: prevsv (:,:) => null()  !< meridional wind from previous time step
+    real (kind=kind_phys), pointer :: prevst (:,:) => null()  !< air temperature from previous time step
+    real (kind=kind_phys), pointer :: prevsq (:,:) => null()  !< specific humidity from previous time step
+
+    !--- dynamical forcing variables
+    real (kind=kind_phys), pointer :: forceu (:,:) => null()  !< zonal wind tendency due to dynamics
+    real (kind=kind_phys), pointer :: forcev (:,:) => null()  !< meridional wind tendency due to dynamics
+    real (kind=kind_phys), pointer :: forcet (:,:) => null()  !< air temperature tendency due to dynamics
+    real (kind=kind_phys), pointer :: forceq (:,:) => null()  !< specific humidity tendency due to dynamics
+
+  contains
       procedure :: create  => statein_create  !<   allocate array data
   end type GFS_statein_type
 
@@ -188,19 +200,36 @@ module GFS_typedefs
 !!
   type GFS_stateout_type
 
-    !-- Out (physics only)
+    !-- State variables
     real (kind=kind_phys), pointer :: gu0 (:,:)   => null()  !< updated zonal wind
     real (kind=kind_phys), pointer :: gv0 (:,:)   => null()  !< updated meridional wind
     real (kind=kind_phys), pointer :: gt0 (:,:)   => null()  !< updated temperature
     real (kind=kind_phys), pointer :: gq0 (:,:,:) => null()  !< updated tracers
 
+    !-- Instantaneous state tendencies for physics processes
     !-- Out (process tendencies)
-    !-- PBL
-    real (kind=kind_phys), pointer :: ten_u_pbl(:,:)   => null()  !< Zonal-wind tendency ...
-    real (kind=kind_phys), pointer :: ten_v_pbl(:,:)   => null()  !< Meridional-wind tendency ...
-    !-- Convection
-    real (kind=kind_phys), pointer :: ten_u_conv(:,:)  => null()  !< Zonal-wind tendency due to convection scheme
-    real (kind=kind_phys), pointer :: ten_v_conv(:,:)  => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_u_pbl(:,:)      => null()  !< Zonal-wind tendency due to PBL scheme
+    real (kind=kind_phys), pointer :: ten_v_pbl(:,:)      => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_t_pbl(:,:)      => null()  !< Air temperature tendency ...
+    real (kind=kind_phys), pointer :: ten_q_pbl(:,:)      => null()  !< Tracer concentration tendency ...
+    real (kind=kind_phys), pointer :: ten_u_shalconv(:,:) => null()  !< Zonal-wind tendency due to shallow convection scheme
+    real (kind=kind_phys), pointer :: ten_v_shalconv(:,:) => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_t_shalconv(:,:) => null()  !< Air temperature tendency ...
+    real (kind=kind_phys), pointer :: ten_q_shalconv(:,:) => null()  !< Tracer concentration tendency ...
+    real (kind=kind_phys), pointer :: ten_u_deepconv(:,:) => null()  !< Zonal-wind tendency due to deep convection scheme
+    real (kind=kind_phys), pointer :: ten_v_deepconv(:,:) => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_t_deepconv(:,:) => null()  !< Air temperature tendency ...
+    real (kind=kind_phys), pointer :: ten_q_deepconv(:,:) => null()  !< Tracer concentration tendency ...
+    real (kind=kind_phys), pointer :: ten_u_gwd(:,:)      => null()  !< Zonal-wind tendency due to gravity wave drag scheme
+    real (kind=kind_phys), pointer :: ten_v_gwd(:,:)      => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_t_gwd(:,:)      => null()  !< Air temperature tendency ...
+    real (kind=kind_phys), pointer :: ten_q_gwd(:,:)      => null()  !< Tracer concentration tendency ...
+    real (kind=kind_phys), pointer :: ten_u_mp(:,:)       => null()  !< Zonal-wind tendency due to microphysics scheme
+    real (kind=kind_phys), pointer :: ten_v_mp(:,:)       => null()  !< Meridional-wind tendency ...
+    real (kind=kind_phys), pointer :: ten_t_mp(:,:)       => null()  !< Air temperature tendency ...
+    real (kind=kind_phys), pointer :: ten_q_mp(:,:)       => null()  !< Tracer concentration tendency ...
+    real (kind=kind_phys), pointer :: ten_t_swrad(:,:)    => null()  !< Air temperature tendency due to shortwave radiation scheme
+    real (kind=kind_phys), pointer :: ten_t_lwrad(:,:)    => null()  !< Air temperature tendency due to longwave radiation scheme
 
     contains
       procedure :: create  => stateout_create  !<   allocate array data
@@ -671,9 +700,6 @@ module GFS_typedefs
     real (kind=kind_phys), pointer :: qci_conv(:,:)   => null()  !< convective cloud condesate after rainout
     real (kind=kind_phys), pointer :: pfi_lsan(:,:)   => null()  !< instantaneous 3D flux of ice    nonconvective precipitation (kg m-2 s-1)
     real (kind=kind_phys), pointer :: pfl_lsan(:,:)   => null()  !< instantaneous 3D flux of liquid nonconvective precipitation (kg m-2 s-1)
-
-    !-- prognostic updraft area fraction coupling in convection
-    real (kind=kind_phys), pointer :: dqdt_qmicro(:,:) => null()  !< instantanious microphysics tendency to be passed from MP to convection
 
     !-- lake surface temperature from cdeps inline
     real (kind=kind_phys), pointer :: mask_dat   (:) => null()   !< land-sea mask from cdeps inline
@@ -1886,11 +1912,6 @@ module GFS_typedefs
     real (kind=kind_phys), pointer :: dku3d_h  (:,:)     => null()  !< Horizontal eddy diffusitivity for momentum
     real (kind=kind_phys), pointer :: dku3d_e  (:,:)     => null()  !< Eddy diffusitivity for momentum for tke
 
-    !--- dynamical forcing variables for Grell-Freitas convection
-    real (kind=kind_phys), pointer :: forcet (:,:)     => null()  !<
-    real (kind=kind_phys), pointer :: forceq (:,:)     => null()  !<
-    real (kind=kind_phys), pointer :: prevst (:,:)     => null()  !<
-    real (kind=kind_phys), pointer :: prevsq (:,:)     => null()  !<
     integer,               pointer :: cactiv   (:)     => null()  !< convective activity memory contour
     integer,               pointer :: cactiv_m (:)     => null()  !< mid-level convective activity memory contour
     real (kind=kind_phys), pointer :: aod_gf   (:)     => null()
@@ -2432,6 +2453,27 @@ module GFS_typedefs
     Statein%stc   = clear_val
     Statein%slc   = clear_val
 
+    !--- Physics state variable from previous time step
+    allocate (Statein%prevsu(IM, Model%levs))
+    allocate (Statein%prevsv(IM, Model%levs))
+    allocate (Statein%prevst(IM, Model%levs))
+    allocate (Statein%prevsq(IM, Model%levs))
+
+    !--- Derived dynamic forcing
+    allocate (Statein%forceu(IM, Model%levs))
+    allocate (Statein%forcev(IM, Model%levs))
+    allocate (Statein%forcet(IM, Model%levs))
+    allocate (Statein%forceq(IM, Model%levs))
+
+    Statein%prevsu = clear_val
+    Statein%prevsv = clear_val
+    Statein%prevst = clear_val
+    Statein%prevsq = clear_val
+    Statein%forceu = clear_val
+    Statein%forcev = clear_val
+    Statein%forcet = clear_val
+    Statein%forceq = clear_val
+
   end subroutine statein_create
 
 
@@ -2459,15 +2501,51 @@ module GFS_typedefs
     Stateout%gq0 = clear_val
 
     ! Physics tendencies for coupling
-    allocate (Stateout%ten_u_pbl  (IM,Model%levs))
-    allocate (Stateout%ten_v_pbl  (IM,Model%levs))
-    allocate (Stateout%ten_u_conv (IM,Model%levs))
-    allocate (Stateout%ten_v_conv (IM,Model%levs))
+    allocate (Stateout%ten_u_pbl        (IM,Model%levs))
+    allocate (Stateout%ten_v_pbl        (IM,Model%levs))
+    allocate (Stateout%ten_t_pbl        (IM,Model%levs))
+    allocate (Stateout%ten_q_pbl        (IM,Model%levs))
+    allocate (Stateout%ten_u_shalconv   (IM,Model%levs))
+    allocate (Stateout%ten_v_shalconv   (IM,Model%levs))
+    allocate (Stateout%ten_t_shalconv   (IM,Model%levs))
+    allocate (Stateout%ten_q_shalconv   (IM,Model%levs))
+    allocate (Stateout%ten_u_deepconv   (IM,Model%levs))
+    allocate (Stateout%ten_v_deepconv   (IM,Model%levs))
+    allocate (Stateout%ten_t_deepconv   (IM,Model%levs))
+    allocate (Stateout%ten_q_deepconv   (IM,Model%levs))
+    allocate (Stateout%ten_u_gwd        (IM,Model%levs))
+    allocate (Stateout%ten_v_gwd        (IM,Model%levs))
+    allocate (Stateout%ten_t_gwd        (IM,Model%levs))
+    allocate (Stateout%ten_q_gwd        (IM,Model%levs))
+    allocate (Stateout%ten_u_mp         (IM,Model%levs))
+    allocate (Stateout%ten_v_mp         (IM,Model%levs))
+    allocate (Stateout%ten_t_mp         (IM,Model%levs))
+    allocate (Stateout%ten_q_mp         (IM,Model%levs))
+    allocate (Stateout%ten_t_swrad      (IM,Model%levs))
+    allocate (Stateout%ten_t_lwrad      (IM,Model%levs))
 
-    Stateout%ten_u_pbl  = clear_val
-    Stateout%ten_v_pbl  = clear_val
-    Stateout%ten_u_conv = clear_val
-    Stateout%ten_v_conv = clear_val
+    Stateout%ten_u_pbl      = clear_val
+    Stateout%ten_v_pbl      = clear_val
+    Stateout%ten_q_pbl      = clear_val
+    Stateout%ten_t_pbl      = clear_val
+    Stateout%ten_u_shalconv = clear_val
+    Stateout%ten_v_shalconv = clear_val
+    Stateout%ten_q_shalconv = clear_val
+    Stateout%ten_t_shalconv = clear_val
+    Stateout%ten_u_deepconv = clear_val
+    Stateout%ten_v_deepconv = clear_val
+    Stateout%ten_q_deepconv = clear_val
+    Stateout%ten_t_deepconv = clear_val
+    Stateout%ten_u_gwd      = clear_val
+    Stateout%ten_v_gwd      = clear_val
+    Stateout%ten_q_gwd      = clear_val
+    Stateout%ten_t_gwd      = clear_val
+    Stateout%ten_u_mp       = clear_val
+    Stateout%ten_v_mp       = clear_val
+    Stateout%ten_q_mp       = clear_val
+    Stateout%ten_t_mp       = clear_val
+    Stateout%ten_t_swrad    = clear_val
+    Stateout%ten_t_lwrad    = clear_val
 
  end subroutine stateout_create
 
@@ -3351,11 +3429,6 @@ module GFS_typedefs
       allocate (Coupling%rainc_cpl (IM))
       Coupling%rainc_cpl = clear_val
     end if
-
-    if(Model%progsigma)then
-       allocate (Coupling%dqdt_qmicro (IM,Model%levs))
-       Coupling%dqdt_qmicro = clear_val
-    endif
 
     !--- stochastic physics option
     if (Model%do_sppt .or. Model%ca_global) then
@@ -7826,24 +7899,10 @@ module GFS_typedefs
     allocate (Tbd%dku3d_e (IM,Model%levs))
     Tbd%dku3d_e    = clear_val
 
-    if (Model%imfdeepcnv == Model%imfdeepcnv_gf .or. Model%imfdeepcnv == Model%imfdeepcnv_ntiedtke .or. Model%imfdeepcnv == Model%imfdeepcnv_samf .or. Model%imfshalcnv == Model%imfshalcnv_samf .or. Model%imfdeepcnv == Model%imfdeepcnv_c3 .or. Model%imfshalcnv == Model%imfshalcnv_c3) then
-       allocate (Tbd%prevsq(IM, Model%levs))
-       Tbd%prevsq = clear_val
-    endif
-
     if (Model%imfdeepcnv .ge. 0 .or. Model%imfshalcnv .ge. 0) then
        allocate (Tbd%ud_mf(IM, Model%levs))
        Tbd%ud_mf = zero
     endif
-
-    if (Model%imfdeepcnv == Model%imfdeepcnv_gf .or. Model%imfdeepcnv == Model%imfdeepcnv_ntiedtke .or.  Model%imfdeepcnv == Model%imfdeepcnv_c3) then
-       allocate (Tbd%forcet(IM, Model%levs))
-       allocate (Tbd%forceq(IM, Model%levs))
-       allocate (Tbd%prevst(IM, Model%levs))
-       Tbd%forcet = clear_val
-       Tbd%forceq = clear_val
-       Tbd%prevst = clear_val
-    end if
 
     if (Model%imfdeepcnv == Model%imfdeepcnv_gf .or.  Model%imfdeepcnv == Model%imfdeepcnv_c3) then
        allocate (Tbd%cactiv(IM))

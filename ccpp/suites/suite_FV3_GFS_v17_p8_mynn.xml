@@ -55,7 +55,7 @@
       <!--scheme>satmedmfvdifq</scheme-->
       <!--scheme>GFS_PBL_generic_post</scheme-->
       <scheme>mynnedmf_wrapper</scheme>
-      <scheme>mynnedmf_wrapper_post</scheme>
+      <scheme>GFS_PBL_generic_post</scheme>
       <scheme>GFS_GWD_generic_pre</scheme>
       <scheme>unified_ugwp</scheme>
       <scheme>unified_ugwp_post</scheme>

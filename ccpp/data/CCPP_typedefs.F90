@@ -104,8 +104,6 @@ module CCPP_typedefs
     real (kind=kind_phys), pointer      :: dusfcg(:)          => null()  !<
     real (kind=kind_phys), pointer      :: dusfc1(:)          => null()  !<
     real (kind=kind_phys), pointer      :: dvdftra(:,:,:)     => null()  !<
-    real (kind=kind_phys), pointer      :: ten_t_pbl(:,:)     => null()  !<
-    real (kind=kind_phys), pointer      :: ten_q_pbl(:,:)     => null()  !<
     real (kind=kind_phys), pointer      :: dvdt(:,:)          => null()  !<
     real (kind=kind_phys), pointer      :: dvsfcg(:)          => null()  !<
     real (kind=kind_phys), pointer      :: dvsfc1(:)          => null()  !<
@@ -561,8 +559,6 @@ contains
     allocate (Interstitial%dusfcg          (ixs:ixe))
     allocate (Interstitial%dusfc1          (ixs:ixe))
     allocate (Interstitial%dvdt            (ixs:ixe,Model%levs))
-    allocate (Interstitial%ten_t_pbl       (ixs:ixe,Model%levs))
-    allocate (Interstitial%ten_q_pbl       (ixs:ixe,Model%levs))
     allocate (Interstitial%dvsfcg          (ixs:ixe))
     allocate (Interstitial%dvsfc1          (ixs:ixe))
     allocate (Interstitial%dvdftra         (ixs:ixe,Model%levs,Interstitial%nvdiff))
@@ -920,8 +916,6 @@ contains
     deallocate (Interstitial%dvsfcg)
     deallocate (Interstitial%dvsfc1)
     deallocate (Interstitial%dvdftra)
-    deallocate (Interstitial%ten_t_pbl)
-    deallocate (Interstitial%ten_q_pbl)
     deallocate (Interstitial%dzlyr)
     deallocate (Interstitial%elvmax)
     deallocate (Interstitial%ep1d)
@@ -1476,8 +1470,6 @@ contains
     Interstitial%dvsfcg          = clear_val
     Interstitial%dvsfc1          = clear_val
     Interstitial%dvdftra         = clear_val
-    Interstitial%ten_t_pbl       = clear_val
-    Interstitial%ten_q_pbl       = clear_val
     Interstitial%dzlyr           = clear_val
     Interstitial%elvmax          = clear_val
     Interstitial%ep1d            = clear_val

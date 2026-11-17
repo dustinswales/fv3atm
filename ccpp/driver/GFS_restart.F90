@@ -500,11 +500,11 @@ module GFS_restart
        idx = idx + 1
        Restart(idx)%name = 'sas_3d_qgrs_dsave'
        Restart(idx)%axes = 3
-       Restart(idx)%data%var3 => Tbd%prevsq(:,:)
+       Restart(idx)%data%var3 => Statein%prevsq(:,:)
        idx = idx + 1
        Restart(idx)%name = 'sas_3d_dqdt_qmicro'
        Restart(idx)%axes = 3
-       Restart(idx)%data%var3 => Coupling%dqdt_qmicro(:,:)
+       Restart(idx)%data%var3 => Stateout%ten_q_mp(:,:)
     endif
 
     !--Convection variable used in CB cloud fraction. Presently this
@@ -521,11 +521,11 @@ module GFS_restart
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_prevst'
       Restart(idx)%axes = 3
-      Restart(idx)%data%var3 => Tbd%prevst(:,:)
+      Restart(idx)%data%var3 => Statein%prevst(:,:)
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_prevsq'
       Restart(idx)%axes = 3
-      Restart(idx)%data%var3 => Tbd%prevsq(:,:)
+      Restart(idx)%data%var3 => Statein%prevsq(:,:)
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_qci_conv'
       Restart(idx)%axes = 3
@@ -538,11 +538,11 @@ module GFS_restart
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_prevst'
       Restart(idx)%axes = 3
-      Restart(idx)%data%var3 => Tbd%prevst(:,:)
+      Restart(idx)%data%var3 => Statein%prevst(:,:)
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_prevsq'
       Restart(idx)%axes = 3
-      Restart(idx)%data%var3 => Tbd%prevsq(:,:)
+      Restart(idx)%data%var3 => Statein%prevsq(:,:)
       idx = idx + 1
       Restart(idx)%name = 'gf_3d_qci_conv'
       Restart(idx)%axes = 3
