@@ -886,14 +886,12 @@ contains
     type(GFS_sfcprop_type),      intent(inout) :: surface
     ! Locals
     type(mpas_pool_type), pointer :: sfc_input, mesh, diag_phys
-    integer :: iCol, iLev, ithread, soiltyp, errflg, k
-    real(RKIND) :: bexp, smcmax, psisat, fk, w
-    real(RKIND), allocatable :: zmid(:)
-    logical :: remap_soil
+    integer :: iCol, iLev, ithread, soiltyp, errflg
+    real(RKIND) :: bexp, smcmax, psisat, fk
     character(len=512) :: errmsg
     integer, pointer :: nThreads, cellSolveThreadStart(:), cellSolveThreadEnd(:)
     integer, pointer :: isltyp(:), ivgtyp(:), landmask(:), nSoilLevels
-    real(RKIND), pointer :: dzs(:,:), zs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
+    real(RKIND), pointer :: dzs(:,:), sh2o(:,:), smois(:,:), tslb(:,:)
     real(RKIND), pointer :: albbck(:), skintemp(:), snow(:), snowc(:), snowh(:)
     real(RKIND), pointer :: sst(:), tmn(:), vegfra(:), seaice(:), xice(:), xland(:), znt(:), sfc_albedo(:), canwat(:)
     real(RKIND), pointer :: greenfrac(:,:), albedo12m(:,:), landusef(:,:), soilf(:,:), sfc_emiss(:)
@@ -928,7 +926,6 @@ contains
     call mpas_pool_get_array(sfc_input, 'ter',       ter)       !dim (nCells); terrain height (m)
     call mpas_pool_get_array(sfc_input, 'tmn' ,      tmn)       !dim (nCells Time); deep soil temperature (K)
     call mpas_pool_get_array(sfc_input, 'tslb',      tslb)      !dim (nSoilLevels nCells Time); soil layer temperature (K)
-    call mpas_pool_get_array(sfc_input, 'zs',        zs)        !dim (nSoilLevels nCells Time); depth of soil levels (m)
     call mpas_pool_get_array(sfc_input, 'vegfra',    vegfra)    !dim (nCells Time); vegetation fraction (percent)
     call mpas_pool_get_array(sfc_input, 'seaice',    seaice)    !dim (nCells Time); sea-ice flag (0=no seaice; =1 otherwise)
     call mpas_pool_get_array(sfc_input, 'xice',      xice)      !dim (nCells Time); fractional area coverage of sea-ice
@@ -945,14 +942,26 @@ contains
     call mpas_pool_get_array(diag_phys, 'sfc_albedo',sfc_albedo)!dim (nCells); surface albedo (fraction)
     call mpas_pool_get_array(diag_phys, 'sfc_emiss', sfc_emiss)
 
-    ! Noah/Noah-MP soil layers (Model%zs = layer bottoms, negative down) need not match the
-    ! IC's soil levels (9 RUC levels in RUC-style ICs), so interpolate the IC soil state to
-    ! the physics layer centers. RUC (lsoil = nSoilLevels) keeps the direct copy.
-    remap_soil = (control % lsm == control % lsm_noah .or. control % lsm == control % lsm_noahmp) &
-                 .and. nSoilLevels > 1 .and. nSoilLevels /= control % lsoil
-    if (remap_soil) then
-      allocate(zmid(control % lsoil))
-      zmid(:) = -control % zs(1:control % lsoil) - 0.5_RKIND*control % dzs(1:control % lsoil)
+    ! The IC's soil levels (nSoilLevels, read from the IC file) must match the LSM; they are
+    ! copied level by level, not remapped. Noah-MP: 4 or 10 levels, equal to lsoil_lsm and
+    ! lsoil. RUC: 9 levels. Other LSMs are not used by any MPAS suite and are not checked.
+    if (control % lsm == control % lsm_noahmp) then
+      if ((control % lsoil_lsm /= 4 .and. control % lsoil_lsm /= 10) .or. &
+          nSoilLevels /= control % lsoil_lsm .or. control % lsoil /= control % lsoil_lsm) then
+        call mpas_log_write(subname // ' ERROR: the IC has $i soil levels, but Noah-MP is set up with ' // &
+                            'lsoil_lsm = $i and lsoil = $i. Noah-MP needs 4 or 10 soil levels, with the ' // &
+                            'IC, lsoil_lsm and lsoil all equal. Use an IC made for Noah-MP ' // &
+                            '(init_atmosphere config_nsoillevels) or change the namelist.', &
+                            messageType=MPAS_LOG_CRIT, &
+                            intArgs=(/nSoilLevels, control % lsoil_lsm, control % lsoil/))
+      end if
+    elseif (control % lsm == control % lsm_ruc) then
+      if (nSoilLevels /= 9 .or. control % lsoil_lsm /= 9) then
+        call mpas_log_write(subname // ' ERROR: the IC has $i soil levels and lsoil_lsm = $i, but ' // &
+                            'RUC needs 9 for both. Use an IC made for RUC (init_atmosphere ' // &
+                            'config_nsoillevels = 9) or change the namelist.', &
+                            messageType=MPAS_LOG_CRIT, intArgs=(/nSoilLevels, control % lsoil_lsm/))
+      end if
     end if
 
     do ithread = 1,nThreads
@@ -1025,49 +1034,28 @@ contains
             surface % tslb(iCol, iLev)  = tslb(iLev, iCol)
           end do
         end if
-        ! smc/stc/slc are allocated for every LSM, but only with Model%lsoil levels
-        ! (4 for Noah/Noah-MP) -- not nSoilLevels, which is the MPAS IC's own soil
-        ! discretization (9 here, a RUC-style IC).
-        if (remap_soil) then
-          if (landmask(iCol) == 1) then
-            if (any(zs(2:nSoilLevels,iCol) <= zs(1:nSoilLevels-1,iCol))) then
-              call mpas_log_write(subname // ' ERROR: IC soil level depths (zs) are not increasing', &
-                                  messageType=MPAS_LOG_CRIT)
-            end if
-          end if
-          ! Linear interpolation in depth; constant beyond the shallowest/deepest IC level.
+        ! smc/stc/slc are allocated for every LSM with Model%lsoil levels. For Noah-MP these
+        ! match the IC levels one to one (checked above). Other LSMs keep the original copy.
+        if (control % lsm == control % lsm_noahmp) then
           do iLev = 1, control % lsoil
-            if (zmid(iLev) <= zs(1,iCol)) then
-              k = 1
-              w = 1._RKIND
-            elseif (zmid(iLev) >= zs(nSoilLevels,iCol)) then
-              k = nSoilLevels - 1
-              w = 0._RKIND
-            else
-              k = 1
-              do while (zs(k+1,iCol) < zmid(iLev))
-                k = k + 1
-              end do
-              w = (zs(k+1,iCol) - zmid(iLev)) / (zs(k+1,iCol) - zs(k,iCol))
-            end if
-            surface % smc(iCol, iLev) = w*smois(k,iCol) + (1._RKIND-w)*smois(k+1,iCol)
-            surface % stc(iCol, iLev) = w*tslb(k,iCol)  + (1._RKIND-w)*tslb(k+1,iCol)
-            surface % slc(iCol, iLev) = w*sh2o(k,iCol)  + (1._RKIND-w)*sh2o(k+1,iCol)
+            surface % smc(iCol, iLev) = smois(iLev, iCol)
+            surface % stc(iCol, iLev) = tslb(iLev, iCol)
+            surface % slc(iCol, iLev) = sh2o(iLev, iCol)
           end do
         else
           do iLev=1, min(nSoilLevels, control % lsoil)
             surface % smc(iCol, iLev) = smois(iLev, iCol)
             surface % stc(iCol, iLev) = tslb(iLev, iCol)
-            surface % slc(iCol, iLev) = sh2o(iLev, iCol)
           end do
         end if
       end do
     end do
 
-    ! Liquid soil water for Noah-MP. RUC-style MPAS ICs carry sh2o = 0 everywhere, so where
-    ! the IC gives no liquid water, diagnose it from smc/stc with the frozen-soil relation used
-    ! by MPAS's own Noah-MP init (mpas_atmphys_lsm_noahmpinit.F). Glacier points are reset by
-    ! GFS_phys_time_vary_init (smc=1, slc=0).
+    ! Liquid soil water for Noah-MP. MPAS ICs carry sh2o = 0 on land (init_atmosphere sets it so
+    ! for both 4- and 9-level ICs), so where the IC gives no liquid water, diagnose it from
+    ! smc/stc with the frozen-soil relation used by MPAS's own Noah-MP init
+    ! (mpas_atmphys_lsm_noahmpinit.F). Glacier points are reset by GFS_phys_time_vary_init
+    ! (smc=1, slc=0).
     if (control % lsm == control % lsm_noahmp) then
       call read_mp_table_parameters(errmsg, errflg)
       if (errflg /= 0) call mpas_log_write(subname // ' ERROR: ' // trim(errmsg), messageType=MPAS_LOG_CRIT)
@@ -1158,8 +1146,6 @@ contains
     !  control % dzs(iLev) = dzs(iLev,1)
     !  control % zs(iLev) = control % zs(iLev-1) - control % dzs(iLev)
     !end do
-
-    if (allocated(zmid)) deallocate(zmid)
 
   end subroutine ufs_mpas_sfc_to_physics
 
