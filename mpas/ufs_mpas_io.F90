@@ -533,19 +533,20 @@ contains
     nfiles = size(lbc_filenames)
     if (me == master) then
        if (size(lbc_filenames) == 0) then
-          call mpas_log_write(subname // ' No LBC files given (atmos_model_nml: lbc_filename)', &
-                              messageType=MPAS_LOG_WARN)
-          ierr = 1
+          if (nfiles == 0) then
+             print*, 'ERROR: ', subname, ': No LBC files given (atmos_model_nml: lbc_filename)'
+             ierr = 1
+          end if
        end if
        ! Fail now rather than in the middle of the forecast.
-       do ifile = 1, size(lbc_filenames)
+       do ifile = 1, nfiles
           INQUIRE(FILE=trim(lbc_filenames(ifile)), EXIST=file_exists)
           if (.not. file_exists) then
-             call mpas_log_write(subname // ' LBC file not found: ' // trim(lbc_filenames(ifile)), &
-                                 messageType=MPAS_LOG_WARN)
+             print*, 'ERROR: ', subname, ': LBC file not found: ', trim(lbc_filenames(ifile))
              ierr = 1
           end if
        end do
+       if (ierr == 0) print*, subname, ': ', nfiles, ' LBC file(s)'
     end if
     call mpi_bcast(ierr, 1, MPI_INTEGER, master, mpicomm, mpierr)
 

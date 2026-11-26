@@ -51,7 +51,6 @@ contains
     use mpas_pool_routines,  only : mpas_pool_shift_time_levels, mpas_pool_get_array
     use mpas_pool_routines,  only : mpas_pool_get_dimension, mpas_pool_get_field
     use module_mpas_config,  only : pioid_lbc
-    use pio, only : pio_inq_dimid, pio_inq_dimlen, pio_noerr, pio_inq_varid
     use pio, only : pio_noerr, pio_inq_varid
 
     implicit none
