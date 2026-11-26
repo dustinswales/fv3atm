@@ -20,6 +20,8 @@ module ufs_mpas_io
   use mpas_derived_types,  only : MPAS_LOG_CRIT, MPAS_LOG_WARN
   use module_mpas_config,  only : pio_iotype, pio_stride, pio_numiotasks, pio_iodesc
   use module_mpas_config,  only : lbc_filename,        pioid_lbc,      pio_subsystem_lbc
+  use module_mpas_config,  only : lbc_filenames,       lbc_file_is_open
+  use module_mpas_config,  only : lbc_file_index,      lbc_file_nrec,  lbc_file_record
   use module_mpas_config,  only : ic_filename,         pioid_ic,       pio_subsystem_ic
   use module_mpas_config,  only : oro_filename,        pioid_oro,      pio_subsystem_oro
   use module_mpas_config,  only :                      pioid_restart,  pio_subsystem_restart
@@ -523,12 +525,12 @@ contains
     type(MPI_Comm), intent(in) :: mpicomm
     integer, intent(out) :: ierr
     character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_init_lbc'
-    integer :: ifile, mpierr
+    integer :: ifile, mpierr, nfiles
     logical :: file_exists
 
     ierr = 0
     lbc_filenames = pack(lbc_filename, len_trim(lbc_filename) > 0)
-
+    nfiles = size(lbc_filenames)
     if (me == master) then
        if (size(lbc_filenames) == 0) then
           call mpas_log_write(subname // ' No LBC files given (atmos_model_nml: lbc_filename)', &
@@ -544,7 +546,6 @@ contains
              ierr = 1
           end if
        end do
-       call mpas_log_write(subname // ' $i LBC files', intArgs=[size(lbc_filenames)])
     end if
     call mpi_bcast(ierr, 1, MPI_INTEGER, master, mpicomm, mpierr)
 

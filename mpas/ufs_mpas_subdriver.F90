@@ -643,7 +643,6 @@ contains
        !
        if (config_apply_lbcs) then
           if (LBC_intv_end .LE. timeNow) then
-             nRecord_lbc = nRecord_lbc + 1
              call mpas_log_write('--------------------------------------------------')
              call mpas_log_write('Update lateral boundary conditions for timestep '//trim(timeStamp))
              call ufs_mpas_atm_update_bdy_tend(clock, domain_ptr % blocklist, .false., ierr, debug)
