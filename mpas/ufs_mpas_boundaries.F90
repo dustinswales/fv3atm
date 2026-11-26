@@ -34,7 +34,7 @@ contains
   !> \update: Dustin Swales September 2025 - Modified for use in UWM
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_atm_update_bdy_tend(clock, block, firstCall, nRecord, ierr, debug)
+  subroutine ufs_mpas_atm_update_bdy_tend(clock, block, firstCall, ierr, debug)
     use mpas_constants,      only : rvord
     use mpas_log,            only : mpas_log_write
     use mpas_derived_types,  only : MPAS_STREAM_MGR_NOERR, MPAS_LOG_ERR
@@ -52,13 +52,13 @@ contains
     use mpas_pool_routines,  only : mpas_pool_get_dimension, mpas_pool_get_field
     use module_mpas_config,  only : pioid_lbc
     use pio, only : pio_inq_dimid, pio_inq_dimlen, pio_noerr, pio_inq_varid
+    use pio, only : pio_noerr, pio_inq_varid
 
     implicit none
 
     type (mpas_clock_type), intent(in) :: clock
     type (block_type), intent(inout) :: block
     logical, intent(in) :: firstCall
-    integer, intent(in) :: nRecord
     integer, intent(out) :: ierr
     logical, intent(in) :: debug
 
@@ -105,10 +105,14 @@ contains
     character(len=StrKIND) :: read_time
     integer :: iEdge, iCell, k, j
     integer :: cell1, cell2
-    integer :: dimid, nRecFile, pio_ierr
+    integer :: pio_ierr
     type (field3dReal), pointer :: lbc_scalars_field
     real (kind=RKIND), dimension(:,:,:), pointer :: state_scalars, lbc_scalars_prev
     integer :: varid
+    integer :: iRecord, find_ierr
+    type (MPAS_Time_Type) :: timeNow
+    character(len=StrKIND) :: rec_time, now_string
+    character(len=*), parameter :: subname = 'ufs_mpas_boundaries::ufs_mpas_atm_update_bdy_tend'
 
     ierr = 0
 
@@ -116,32 +120,39 @@ contains
     call mpas_pool_get_subpool(block % structs, 'state', state)
     call mpas_pool_get_subpool(block % structs, 'lbc', lbc)
 
-    ! Check if forecast out ran the LBC forcing window.
-    ! If so, exit model with error.
-    pio_ierr = pio_inq_dimid(pioid_lbc, 'Time', dimid)
-    if (pio_ierr == pio_noerr) pio_ierr = pio_inq_dimlen(pioid_lbc, dimid, nRecFile)
-    if (pio_ierr /= pio_noerr) then
-       call mpas_log_write('Could not determine the number of records in the LBC file', messageType=MPAS_LOG_CRIT)
-    else if (nRecord > nRecFile) then
-       call mpas_log_write('LBC file has $i records but record $i is needed: '// &
-            'the forecast runs past the end of the LBC data', intArgs=[nRecFile, nRecord], messageType=MPAS_LOG_CRIT)
+    ! Find the LBC record to read across the LBC files (lbc_filename)
+    if (firstCall) then
+       timeNow = mpas_get_clock_time(clock, MPAS_NOW, find_ierr)
+       call ufs_mpas_lbc_find_record(timeNow, .false., iRecord, rec_time, find_ierr)
+       if (find_ierr /= 0) then
+          call mpas_get_time(timeNow, dateTimeString=now_string)
+          call mpas_log_write(subname // ' No LBC data valid at or before the model start time '// &
+                              trim(now_string), messageType=MPAS_LOG_CRIT)
+       end if
+    else
+       call ufs_mpas_lbc_find_record(LBC_intv_end, .true., iRecord, rec_time, find_ierr)
+       if (find_ierr /= 0) then
+          call mpas_get_time(LBC_intv_end, dateTimeString=now_string)
+          call mpas_log_write(subname // ' No LBC data after '//trim(now_string)// &
+                              ': the forecast runs past the end of the LBC data', messageType=MPAS_LOG_CRIT)
+       end if
     end if
 
     read_time = 'UNSET'
     if (firstCall) then
        call dyn_mpas_read_write_stream(clock, 'r', 'lbc_in', pio_file_desc=pioid_lbc, ierr=ierr, timeLevel=2, &
-            whence = MPAS_STREAM_LATEST_BEFORE, actualWhen=read_time, nRecord=nRecord, debug=debug)
+            whence = MPAS_STREAM_LATEST_BEFORE, actualWhen=read_time, nRecord=iRecord, debug=debug)
        if (ierr /= MPAS_STREAM_MGR_NOERR) then
-          call mpas_log_write('Could not read from ''lbc_in'' stream on or before the current date '// &
+          call mpas_log_write(subname // ' Could not read from ''lbc_in'' stream on or before the current date '// &
                               'to update lateral boundary tendencies', messageType=MPAS_LOG_ERR)
           ierr = 1
        end if
     else
        call mpas_pool_shift_time_levels(lbc)
        call dyn_mpas_read_write_stream(clock, 'r', 'lbc_in', pio_file_desc=pioid_lbc, ierr=ierr, timeLevel=2,  &
-            whence = MPAS_STREAM_EARLIEST_STRICTLY_AFTER, actualWhen=read_time, nRecord=nRecord, debug=debug)
+            whence = MPAS_STREAM_EARLIEST_STRICTLY_AFTER, actualWhen=read_time, nRecord=iRecord, debug=debug)
        if (ierr /= MPAS_STREAM_MGR_NOERR) then
-          call mpas_log_write('Could not read from ''lbc_in'' stream after the current date '// &
+          call mpas_log_write(subname // ' Could not read from ''lbc_in'' stream after the current date '// &
                               'to update lateral boundary tendencies', messageType=MPAS_LOG_ERR)
           ierr = 1
        end if
@@ -352,6 +363,7 @@ contains
     type (block_type), pointer :: block => null()
     integer, dimension(:), pointer :: bdyMaskCell => null()
     integer :: maxvar2d_local, maxvar2d_global
+    character(len=*), parameter :: subname = 'ufs_mpas_boundaries::ufs_mpas_atm_bdy_checks'
 
     call mpas_pool_get_config(blocklist % configs, 'config_apply_lbcs', config_apply_lbcs)
 

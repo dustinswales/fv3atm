@@ -60,8 +60,15 @@ module module_mpas_config
   !> MPAS Initial Condition file (via UFSATM NML)
   character(len=256) :: ic_filename=""
 
-  !> MPAS Lateral Boundary Condition file (via UFSATM NML)
-  character(len=256) :: lbc_filename=""
+  !> MPAS Lateral Boundary Condition file(s) (via UFSATM NML)
+  integer, parameter :: max_lbc_files = 1000
+  character(len=256) :: lbc_filename(max_lbc_files) = ""
+  character(len=256), allocatable :: lbc_filenames(:)
+  logical :: lbc_file_is_open = .false.
+  !> LBC record keeping
+  integer :: lbc_file_index  = 0
+  integer :: lbc_file_nrec   = 0
+  integer :: lbc_file_record = 0
 
   !> MPAS GWD file
   character(len=256) :: oro_filename="none"

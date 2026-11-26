@@ -105,7 +105,7 @@ contains
   !> #########################################################################################
   subroutine atmos_model_init(Atmos, mpicomm, calendar, CurrTime, StartTime, StopTime)
     use ufs_mpas_subdriver,     only : ufs_mpas_init
-    use ufs_mpas_io,            only : ufs_mpas_open_init, ufs_mpas_open_lbc, ufs_mpas_open_oro
+    use ufs_mpas_io,            only : ufs_mpas_open_init, ufs_mpas_init_lbc, ufs_mpas_open_oro
     use ufs_mpas_io,            only : ufs_mpas_read_stream_lists, ufs_mpas_landuse_read
     use atmos_coupling_mod,     only : ufs_mpas_to_physics, ufs_mpas_grid_to_physics, ufs_mpas_sfc_to_physics
     use atmos_coupling_mod,     only : ufs_mpas_landuse_update, ufs_mpas_gwd_to_physics, ufs_mpas_surface_update
@@ -137,6 +137,7 @@ contains
     integer              :: nblks           !< Number of data (physics) blocks
     integer, pointer     :: blksz(:)        !< Block size for  data blocking (default blksz(1)=[nCells])
     logical, parameter   :: restart=.false. !< flag whether this is a coldstart (.false.) or a warmstart/restart (.true.)
+    integer              :: nlbc            !< Number of LBC files for simulation
     character(len=:), pointer, dimension(:) :: input_nml_file => null()
     character(len=*), parameter :: subname = 'atmos_model::atmos_model_init'
 
@@ -185,6 +186,10 @@ contains
           endif
        endif
     end if
+
+    ! Number of LBC files
+    nlbc = size(lbc_filename)
+
     ! Broadcast ATMosphere namelist to all processors.
     call mpi_barrier(mpicomm, ierr)
     call mpi_bcast(regional,            1,                        MPI_LOGICAL,   master, mpicomm, ierr)
@@ -194,7 +199,7 @@ contains
     call mpi_bcast(ccpp_suite,          len(ccpp_suite),          MPI_CHARACTER, master, mpicomm, ierr)
     call mpi_bcast(blocksize,           1,                        MPI_INTEGER,   master, mpicomm, ierr)
     call mpi_bcast(ic_filename,         len(ic_filename),         MPI_CHARACTER, master, mpicomm, ierr)
-    call mpi_bcast(lbc_filename,        len(lbc_filename),        MPI_CHARACTER, master, mpicomm, ierr)
+    call mpi_bcast(lbc_filename,        len(lbc_filename)*nlbc,   MPI_CHARACTER, master, mpicomm, ierr)
     call mpi_bcast(oro_filename,        len(oro_filename),        MPI_CHARACTER, master, mpicomm, ierr)
     call mpi_bcast(stream_list_history, len(stream_list_history), MPI_CHARACTER, master, mpicomm, ierr)
     call mpi_bcast(stream_list_restart, len(stream_list_restart), MPI_CHARACTER, master, mpicomm, ierr)
@@ -219,9 +224,9 @@ contains
 
     ! Open (PIO) MPAS Lateral Boundary Condition (LBC) file.
     if (regional) then
-       call ufs_mpas_open_lbc(ierr)
+       call ufs_mpas_init_lbc(me, master, mpicomm, ierr)
        if (ierr/=0) then
-          print*,'ERROR: Could not open MPAS LBC file'
+          print*,'ERROR: Could not open MPAS LBC file(s)'
           stop
        endif
     endif
@@ -358,6 +363,7 @@ contains
   !> #########################################################################################
   subroutine atmos_model_end(Atmos)
     use ufs_mpas_tools,      only : stringify
+    use ufs_mpas_io,         only : ufs_mpas_close_lbc
     type (atmos_control_type), intent(inout) :: Atmos
     ! Locals
     integer :: ierr
@@ -380,8 +386,12 @@ contains
     call mpas_log_write('CCPP Microphysics:         '// stringify([mpClock]))
     call mpas_log_write('MPAS Output                '// stringify([outClock]))
     call mpas_log_write('------------------------------------------------------------------')
+
+    ! Close any open files
     close(unit=mpas_logfile_funit)
     close(unit=mpas_errfile_funit)
+    call ufs_mpas_close_lbc()
+
   end subroutine atmos_model_end
 
   !> #########################################################################################

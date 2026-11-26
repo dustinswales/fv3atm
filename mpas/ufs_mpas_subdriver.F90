@@ -44,7 +44,6 @@ module ufs_mpas_subdriver
   public :: ufs_mpas_write_streams
 
   logical :: init_lbc    = .true.
-  integer :: nRecord_lbc = 1
 
 contains
 
@@ -616,9 +615,9 @@ contains
     if (config_apply_lbcs .and. init_lbc) then
        call mpas_log_write('--------------------------------------------------')
        call mpas_log_write('Compute initial lateral boundary conditions for timestep '//trim(timeStamp))
-       call ufs_mpas_atm_update_bdy_tend(clock, domain_ptr % blocklist, .true., nRecord_lbc, ierr, debug)
+       call ufs_mpas_atm_update_bdy_tend(clock, domain_ptr % blocklist, .true.,  ierr, debug)
        if (ierr /= 0) then
-          call mpas_log_write('Failed to process LBC data at next time after '//trim(timeStamp), messageType=MPAS_LOG_ERR)
+          call mpas_log_write(subname //' Failed to process LBC data at next time after '//trim(timeStamp), messageType=MPAS_LOG_ERR)
           return
        end if
        init_lbc = .false.
@@ -647,9 +646,9 @@ contains
              nRecord_lbc = nRecord_lbc + 1
              call mpas_log_write('--------------------------------------------------')
              call mpas_log_write('Update lateral boundary conditions for timestep '//trim(timeStamp))
-             call ufs_mpas_atm_update_bdy_tend(clock, domain_ptr % blocklist, .false., nRecord_lbc, ierr, debug)
+             call ufs_mpas_atm_update_bdy_tend(clock, domain_ptr % blocklist, .false., ierr, debug)
              if (ierr /= 0) then
-                call mpas_log_write('Failed to process LBC data at next time after '//trim(timeStamp), messageType=MPAS_LOG_ERR)
+                call mpas_log_write(subname // ' Failed to process LBC data at next time after '//trim(timeStamp), messageType=MPAS_LOG_ERR)
                 return
              end if
           end if

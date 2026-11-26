@@ -449,23 +449,48 @@ contains
   !> Procedure to open MPAS Lateral Boundary Condition file.
   !>
   !> #########################################################################################
-  subroutine ufs_mpas_open_lbc(ierr)
+  subroutine ufs_mpas_open_lbc(ierr, filename)
     use pio, only : pio_openfile, pio_nowrite, pio_seterrorhandling, PIO_BCAST_ERROR
+    character(len=*), intent(in) :: filename
     integer, intent(out) :: ierr
+    character(len=:), allocatable :: fname
     logical :: file_exists
 
-    ! Open MPAS Initial Condition file.
     ierr = 0
-    INQUIRE(FILE=lbc_filename, EXIST=file_exists)
+
+    ! Close any open LBC file
+    call ufs_mpas_close_lbc()
+
+    ! Open MPAS LBC file.
+    fname = trim(filename)
+
+    INQUIRE(FILE=fname, EXIST=file_exists)
     if (file_exists) then
-       ierr = pio_openfile(pio_subsystem_lbc, pioid_lbc, pio_iotype, lbc_filename, pio_nowrite)
-       if (ierr == 0) call pio_seterrorhandling(pioid_lbc, PIO_BCAST_ERROR)
+       ierr = pio_openfile(pio_subsystem_lbc, pioid_lbc, pio_iotype, fname, pio_nowrite)
+       if (ierr == 0) then
+          call pio_seterrorhandling(pioid_lbc, PIO_BCAST_ERROR)
+          lbc_file_is_open = .true.
+       end if
     else
        ierr = -1
     end if
 
   end subroutine ufs_mpas_open_lbc
 
+  !> #########################################################################################
+  !> Procedure to close the currently open MPAS Lateral Boundary Condition file, if any.
+  !>
+  !> #########################################################################################
+  subroutine ufs_mpas_close_lbc()
+    use pio, only : pio_closefile
+
+    if (lbc_file_is_open) then
+       call pio_closefile(pioid_lbc)
+       lbc_file_is_open = .false.
+    end if
+
+  end subroutine ufs_mpas_close_lbc
+  
   !> #########################################################################################
   !> Procedure to open MPAS GWD data file.
   !>
@@ -485,6 +510,194 @@ contains
     end if
 
   end subroutine ufs_mpas_open_oro
+
+  !> #########################################################################################
+  !> Procedure to set up the MPAS Lateral Boundary Condition files.
+  !>
+  !> lbc_filenames (atmos_model_nml) is a list of one or more LBC files, in chronological order,
+  !> each holding any number of LBC times.
+  !>
+  !> #########################################################################################
+  subroutine ufs_mpas_init_lbc(me, master, mpicomm, ierr)
+    integer, intent(in) :: me, master
+    type(MPI_Comm), intent(in) :: mpicomm
+    integer, intent(out) :: ierr
+    character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_init_lbc'
+    integer :: ifile, mpierr
+    logical :: file_exists
+
+    ierr = 0
+    lbc_filenames = pack(lbc_filename, len_trim(lbc_filename) > 0)
+
+    if (me == master) then
+       if (size(lbc_filenames) == 0) then
+          call mpas_log_write(subname // ' No LBC files given (atmos_model_nml: lbc_filename)', &
+                              messageType=MPAS_LOG_WARN)
+          ierr = 1
+       end if
+       ! Fail now rather than in the middle of the forecast.
+       do ifile = 1, size(lbc_filenames)
+          INQUIRE(FILE=trim(lbc_filenames(ifile)), EXIST=file_exists)
+          if (.not. file_exists) then
+             call mpas_log_write(subname // ' LBC file not found: ' // trim(lbc_filenames(ifile)), &
+                                 messageType=MPAS_LOG_WARN)
+             ierr = 1
+          end if
+       end do
+       call mpas_log_write(subname // ' $i LBC files', intArgs=[size(lbc_filenames)])
+    end if
+    call mpi_bcast(ierr, 1, MPI_INTEGER, master, mpicomm, mpierr)
+
+    lbc_file_index  = 0
+    lbc_file_nrec   = 0
+    lbc_file_record = 0
+
+  end subroutine ufs_mpas_init_lbc
+
+  !> #########################################################################################
+  !> Procedure to find the LBC record to read next, across the list of LBC files.
+  !>
+  !> The LBC times are the records of the files in lbc_filenames, taken in order.
+  !>
+  !> #########################################################################################
+  subroutine ufs_mpas_lbc_find_record(target_time, strictly_after, iRecord, read_time, ierr)
+    use mpas_timekeeping, only : operator(.GT.)
+    type(MPAS_Time_Type), intent(in)  :: target_time
+    logical,              intent(in)  :: strictly_after
+    integer,              intent(out) :: iRecord
+    character(len=*),     intent(out) :: read_time
+    integer,              intent(out) :: ierr
+    character(len=*), parameter :: subname = 'ufs_mpas_io::ufs_mpas_lbc_find_record'
+    integer :: ifile, irec, best_file, best_rec
+    character(len=StrKIND) :: time_str, best_str
+    type(MPAS_Time_Type) :: rec_time
+
+    ierr      = 0
+    iRecord   = 0
+    read_time = ''
+
+    if (.not. strictly_after) then
+       ! Latest LBC time at or before target_time; files are in chronological order, so stop
+       ! at the first record after target_time.
+       best_file = 0
+       best_rec  = 0
+       best_str  = ''
+       search_le: do ifile = 1, size(lbc_filenames)
+          call lbc_open_file(ifile, ierr)
+          if (ierr /= 0) return
+          do irec = 1, lbc_file_nrec
+             call lbc_record_time(irec, time_str, rec_time, ierr)
+             if (ierr /= 0) return
+             if (rec_time .GT. target_time) exit search_le
+             best_file = ifile
+             best_rec  = irec
+             best_str  = time_str
+          end do
+       end do search_le
+       if (best_file == 0) then
+          ierr = 1
+          return
+       end if
+       if (best_file /= lbc_file_index) then
+          call lbc_open_file(best_file, ierr)
+          if (ierr /= 0) return
+       end if
+       lbc_file_record = best_rec
+       iRecord         = best_rec
+       read_time       = best_str
+    else
+       ! Earliest LBC time after target_time, from the record after the one used last.
+       ifile = max(lbc_file_index, 1)
+       irec  = lbc_file_record + 1
+       do while (ifile <= size(lbc_filenames))
+          if (ifile /= lbc_file_index) then
+             call lbc_open_file(ifile, ierr)
+             if (ierr /= 0) return
+          end if
+          do while (irec <= lbc_file_nrec)
+             call lbc_record_time(irec, time_str, rec_time, ierr)
+             if (ierr /= 0) return
+             if (rec_time .GT. target_time) then
+                lbc_file_record = irec
+                iRecord         = irec
+                read_time       = time_str
+                return
+             end if
+             call mpas_log_write(subname // ' skipping LBC time '//trim(time_str)//' in '// &
+                                 trim(lbc_filenames(ifile))//': not after the previous LBC time')
+             irec = irec + 1
+          end do
+          ifile = ifile + 1
+          irec  = 1
+       end do
+       ierr = 2   ! ran past the end of the LBC data
+    end if
+
+  contains
+
+    !> Open LBC file ifile (closing the previous one) and get its number of records.
+    subroutine lbc_open_file(ifile, ierr)
+      use pio, only : pio_inq_dimid, pio_inq_dimlen, pio_noerr
+      integer, intent(in)  :: ifile
+      integer, intent(out) :: ierr
+      integer :: dimid
+      call ufs_mpas_open_lbc(ierr, trim(lbc_filenames(ifile)))
+      if (ierr /= 0) then
+         call mpas_log_write(subname // ' Could not open LBC file '//trim(lbc_filenames(ifile)), &
+                             messageType=MPAS_LOG_WARN)
+         return
+      end if
+      lbc_file_index  = ifile
+      lbc_file_record = 0
+      lbc_file_nrec   = 0
+      ierr = pio_inq_dimid(pioid_lbc, 'Time', dimid)
+      if (ierr == pio_noerr) ierr = pio_inq_dimlen(pioid_lbc, dimid, lbc_file_nrec)
+      if (ierr /= pio_noerr) then
+         call mpas_log_write(subname // ' Could not get the number of records in '// &
+                             trim(lbc_filenames(ifile)), messageType=MPAS_LOG_WARN)
+         ierr = 3
+         return
+      end if
+      ierr = 0
+      call mpas_log_write(subname // ' Opened LBC file '//trim(lbc_filenames(ifile))//' ($i records)', &
+                          intArgs=[lbc_file_nrec])
+    end subroutine lbc_open_file
+
+    !> Read xtime of record irec of the open LBC file.
+    subroutine lbc_record_time(irec, time_str, rec_time, ierr)
+      use pio,              only : pio_inq_dimid, pio_inq_dimlen, pio_inq_varid, pio_get_var, pio_noerr
+      use mpas_timekeeping, only : mpas_set_time
+      integer,                intent(in)  :: irec
+      character(len=StrKIND), intent(out) :: time_str
+      type(MPAS_Time_Type),   intent(out) :: rec_time
+      integer,                intent(out) :: ierr
+      integer :: dimid, varid, strlen, j
+      character(len=StrKIND), dimension(1) :: tempchar
+      time_str    = ''
+      tempchar(1) = ''
+      ierr = pio_inq_dimid(pioid_lbc, 'StrLen', dimid)
+      if (ierr == pio_noerr) ierr = pio_inq_dimlen(pioid_lbc, dimid, strlen)
+      if (ierr == pio_noerr) ierr = pio_inq_varid(pioid_lbc, 'xtime', varid)
+      if (ierr == pio_noerr) ierr = pio_get_var(pioid_lbc, varid, [1, irec], [strlen, 1], tempchar)
+      if (ierr /= pio_noerr) then
+         call mpas_log_write(subname // ' Could not read xtime from '// &
+                             trim(lbc_filenames(lbc_file_index)), messageType=MPAS_LOG_WARN)
+         ierr = 4
+         return
+      end if
+      time_str(1:strlen) = tempchar(1)(1:strlen)
+      do j = 1, len(time_str)
+         if (iachar(time_str(j:j)) < 32) time_str(j:j) = ' '
+      end do
+      call mpas_set_time(rec_time, dateTimeString=trim(time_str), ierr=ierr)
+      if (ierr /= 0) then
+         call mpas_log_write(subname // ' Bad xtime "'//trim(time_str)//'" in '// &
+                             trim(lbc_filenames(lbc_file_index)), messageType=MPAS_LOG_WARN)
+         ierr = 5
+      end if
+    end subroutine lbc_record_time
+
+  end subroutine ufs_mpas_lbc_find_record
 
   !> #########################################################################################
   !>  Procedure to read in file containing surface properties, LANDUSE.TBL.
